@@ -1,0 +1,19 @@
+{
+  "name": "@cadmus/example-cadmus",
+  "version": "0.1.0",
+  "description": "Brain-mapped agent example: hippocampus -> thalamus -> PFC -> executor.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../packages/cli/dist/cli.js dev cadmus.config.ts",
+    "run": "node ../../packages/cli/dist/cli.js run cadmus.config.ts"
+  },
+  "dependencies": {
+    "@cadmus/kernel": "0.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5"
+  }
+}

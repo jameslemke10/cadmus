@@ -1,0 +1,11 @@
+{
+  "name": "@cadmus/example-claudius",
+  "version": "0.1.0",
+  "description": "Claudius — the boring agent. user_input -> PFC -> agent_message, with tools.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cadmus/kernel": "0.1.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "cadmus-monorepo",
+  "version": "0.1.0",
+  "description": "Cadmus — open-source framework for building AI agents on a shared timeline.",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "kernel:build": "npm run build --workspace=@cadmus/kernel",
+    "cli:build": "npm run build --workspace=@cadmus/cli",
+    "studio:dev": "npm run dev --workspace=@cadmus/studio",
+    "build": "npm run kernel:build && npm run cli:build",
+    "start": "node packages/cli/dist/cli.js start"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

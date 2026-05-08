@@ -1,0 +1,14 @@
+{
+  "name": "{{AGENT_NAME}}",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "cadmus start",
+    "dev": "cadmus dev",
+    "inspect": "cadmus inspect"
+  },
+  "dependencies": {
+    "@cadmus/kernel": "*"
+  }
+}

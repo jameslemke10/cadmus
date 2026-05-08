@@ -1,0 +1,631 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createInterface } from "node:readline/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  AGENTS_DIR,
+  CADMUS_HOME,
+  CLI_DIR,
+  CONFIG_PATH,
+  applyApiKeysToEnv,
+  findAgentConfig,
+  getActiveAgent,
+  linkKernelInto,
+  listAgents,
+  readConfig,
+  updateConfig,
+} from "./workspace.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const templatesDir = resolve(here, "..", "templates");
+
+const args = process.argv.slice(2);
+const cmd = args[0];
+
+const HELP = `cadmus — open-source agent framework
+
+Daily use
+  cadmus start              Boot the active agent's kernel + Studio UI
+  cadmus stop               Kill any running cadmus processes
+  cadmus list               Show installed agents (★ marks the active one)
+  cadmus use <name>         Switch the active agent
+
+Setup
+  cadmus setup              Interactive: pick provider, paste API key
+  cadmus config             Edit settings (alias for setup)
+
+Agents
+  cadmus add <name>         Create a new agent under ~/.cadmus/agents/<name>/
+  cadmus rm <name>          Move an agent to ~/.Trash/cadmus-<name>-<ts>
+  cadmus export <name>      Export agent to <name>.cadmus.json (--with-timeline optional)
+  cadmus import <file>      Import an agent from a .cadmus.json file (--as <newname> optional)
+
+Other
+  cadmus inspect            Print the active agent's timeline as JSON
+  cadmus uninstall          Move all of ~/.cadmus to trash (with confirm)
+  cadmus version            Print the CLI version
+  cadmus help               Show this help
+
+Env overrides
+  GOOGLE_API_KEY            Default model is Gemini.
+  ANTHROPIC_API_KEY         For Claude models.
+  CADMUS_PORT               Kernel HTTP port (default 4000).
+  CADMUS_STUDIO_PORT        Studio UI port (default 3001).
+  CADMUS_HOME               Workspace location (default ~/.cadmus).
+`;
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+function bold(s: string): string {
+  return `\x1b[1m${s}\x1b[0m`;
+}
+function dim(s: string): string {
+  return `\x1b[2m${s}\x1b[0m`;
+}
+function green(s: string): string {
+  return `\x1b[32m${s}\x1b[0m`;
+}
+function yellow(s: string): string {
+  return `\x1b[33m${s}\x1b[0m`;
+}
+function red(s: string): string {
+  return `\x1b[31m${s}\x1b[0m`;
+}
+function blue(s: string): string {
+  return `\x1b[34m${s}\x1b[0m`;
+}
+
+function die(msg: string, code = 1): never {
+  console.error(red("✗ ") + msg);
+  process.exit(code);
+}
+
+function printVersion(): void {
+  const pkg = JSON.parse(readFileSync(resolve(here, "..", "package.json"), "utf8")) as {
+    version: string;
+  };
+  process.stdout.write(`cadmus ${pkg.version}\n`);
+}
+
+function resolveTsxBin(): string {
+  const candidates = [
+    resolve(here, "..", "node_modules", ".bin", "tsx"),
+    resolve(here, "..", "..", "..", "node_modules", ".bin", "tsx"),
+    resolve(CLI_DIR, "node_modules", ".bin", "tsx"),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return "npx";
+}
+
+function findStudioDir(): string | null {
+  let dir = here;
+  for (let i = 0; i < 6; i++) {
+    const candidate = resolve(dir, "apps", "studio");
+    if (existsSync(resolve(candidate, "package.json"))) return candidate;
+    const next = resolve(dir, "..");
+    if (next === dir) break;
+    dir = next;
+  }
+  const installed = resolve(CLI_DIR, "apps", "studio");
+  if (existsSync(resolve(installed, "package.json"))) return installed;
+  return null;
+}
+
+async function openBrowser(url: string): Promise<void> {
+  const platform = process.platform;
+  const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
+  try {
+    spawn(cmd, [url], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // best-effort
+  }
+}
+
+function copyRecursive(src: string, dest: string, replacements: Record<string, string>): void {
+  const stat = statSync(src);
+  if (stat.isDirectory()) {
+    mkdirSync(dest, { recursive: true });
+    for (const entry of readdirSync(src)) {
+      copyRecursive(join(src, entry), join(dest, entry), replacements);
+    }
+  } else {
+    let content = readFileSync(src, "utf8");
+    for (const [key, value] of Object.entries(replacements)) {
+      content = content.split(`{{${key}}}`).join(value);
+    }
+    writeFileSync(dest, content);
+  }
+}
+
+// ── commands ────────────────────────────────────────────────────────────
+
+async function cmdStart(): Promise<void> {
+  const active = getActiveAgent();
+  if (!active) {
+    console.log("");
+    console.log(yellow("  No agents installed yet."));
+    console.log(`  Run ${bold("cadmus add <name>")} to create one,`);
+    console.log(`  or reinstall — the installer ships Cadmus and Claudius by default.`);
+    console.log("");
+    process.exit(1);
+  }
+
+  const config = readConfig();
+  const port = Number(process.env.CADMUS_PORT ?? config.port ?? 4000);
+  const studioPort = Number(process.env.CADMUS_STUDIO_PORT ?? config.studioPort ?? 3001);
+  const tsxBin = resolveTsxBin();
+  const runnerScript = resolve(here, "runner.js");
+  const studioDir = findStudioDir();
+
+  console.log("");
+  console.log(`  ${bold("cadmus")}`);
+  console.log(`  ${dim("─".repeat(8))}`);
+  console.log(`  agent  : ${green(active.name)}`);
+  console.log(`  kernel : http://localhost:${port}`);
+  if (studioDir) console.log(`  studio : http://localhost:${studioPort}  ${dim("(starting…)")}`);
+  console.log("");
+
+  const env = applyApiKeysToEnv(process.env);
+
+  const kernel = spawn(
+    tsxBin,
+    [runnerScript, active.configPath, String(port), "dev"],
+    { stdio: "inherit", env },
+  );
+
+  let studio: ReturnType<typeof spawn> | null = null;
+  if (studioDir) {
+    studio = spawn("npx", ["next", "dev", "-p", String(studioPort)], {
+      cwd: studioDir,
+      stdio: "inherit",
+      env: { ...env, NEXT_TELEMETRY_DISABLED: "1" },
+    });
+  }
+
+  const browserDelay = studioDir ? 4000 : 1500;
+  setTimeout(() => {
+    void openBrowser(`http://localhost:${studioDir ? studioPort : port}`);
+  }, browserDelay);
+
+  const cleanup = () => {
+    studio?.kill();
+    kernel.kill();
+  };
+  process.on("SIGINT", () => {
+    cleanup();
+    setTimeout(() => process.exit(0), 200);
+  });
+  process.on("SIGTERM", cleanup);
+  kernel.on("exit", (code) => {
+    cleanup();
+    process.exit(code ?? 0);
+  });
+}
+
+async function cmdStop(): Promise<void> {
+  // Kill running kernel runner + Studio dev server.
+  const patterns = ["cadmus-cli runner", "tsx.*runner.js", "next dev -p"];
+  let killed = 0;
+  for (const pattern of patterns) {
+    try {
+      const result = spawn("pkill", ["-f", pattern], { stdio: "ignore" });
+      result.on("exit", () => undefined);
+      killed += 1;
+    } catch {
+      // ignore
+    }
+  }
+  // Also kill on the standard ports.
+  try {
+    spawn("sh", ["-c", `lsof -ti :4000 | xargs kill 2>/dev/null; lsof -ti :3001 | xargs kill 2>/dev/null`], {
+      stdio: "ignore",
+    });
+  } catch {
+    // ignore
+  }
+  console.log(green("✓ ") + "stopped any running cadmus processes");
+}
+
+function cmdList(): void {
+  const agents = listAgents();
+  if (agents.length === 0) {
+    console.log(yellow("  no agents installed"));
+    console.log(`  run ${bold("cadmus add <name>")} to create one`);
+    return;
+  }
+  console.log("");
+  for (const a of agents) {
+    const marker = a.active ? green("★") : " ";
+    console.log(`  ${marker} ${bold(a.name)}  ${dim(a.path)}`);
+  }
+  console.log("");
+  const config = readConfig();
+  if (!config.activeAgent && agents.length > 0) {
+    console.log(`  ${dim("(no active agent set — first one will be used)")}`);
+  }
+}
+
+function cmdUse(): void {
+  const name = args[1];
+  if (!name) die("usage: cadmus use <name>");
+  const all = listAgents();
+  const match = all.find((a) => a.name === name);
+  if (!match) die(`agent not found: ${name}`);
+  updateConfig({ activeAgent: name });
+  console.log(green("✓ ") + `active agent: ${bold(name)}`);
+}
+
+async function cmdSetup(): Promise<void> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  console.log("");
+  console.log(`  ${bold("Cadmus setup")}`);
+  console.log(`  ${dim("─".repeat(13))}`);
+  console.log("");
+
+  const config = readConfig();
+  const existingGoogle = !!config.apiKeys?.GOOGLE_API_KEY;
+  const existingAnthropic = !!config.apiKeys?.ANTHROPIC_API_KEY;
+
+  console.log("  Cadmus needs a model API key.");
+  console.log("    1) Google Gemini  " + dim("(recommended — free tier, no credit card)"));
+  console.log("    2) Anthropic Claude  " + dim("(pay-per-use)"));
+  console.log("    3) Skip  " + dim("(set keys later via cadmus config or env vars)"));
+  console.log("");
+
+  const choice = (await rl.question("  Which provider? [1] ")).trim() || "1";
+
+  const apiKeys: NonNullable<typeof config.apiKeys> = { ...(config.apiKeys ?? {}) };
+
+  if (choice === "1") {
+    console.log("");
+    console.log(`  Get a free key: ${blue("https://aistudio.google.com/apikey")}`);
+    if (existingGoogle) console.log(dim(`  (current key: ${maskKey(config.apiKeys!.GOOGLE_API_KEY!)})`));
+    const key = (await rl.question("  Paste GOOGLE_API_KEY: ")).trim();
+    if (key) apiKeys.GOOGLE_API_KEY = key;
+  } else if (choice === "2") {
+    console.log("");
+    console.log(`  Get a key: ${blue("https://console.anthropic.com/settings/keys")}`);
+    if (existingAnthropic) console.log(dim(`  (current: ${maskKey(config.apiKeys!.ANTHROPIC_API_KEY!)})`));
+    const key = (await rl.question("  Paste ANTHROPIC_API_KEY: ")).trim();
+    if (key) apiKeys.ANTHROPIC_API_KEY = key;
+  } else {
+    console.log("");
+    console.log(yellow("  ⚠ no provider configured."));
+    console.log("    set GOOGLE_API_KEY or ANTHROPIC_API_KEY in your env, or run cadmus setup again.");
+  }
+
+  updateConfig({ apiKeys });
+  console.log("");
+  console.log(green("✓ ") + `saved to ${CONFIG_PATH}`);
+
+  const start = (await rl.question("  Start cadmus now? [Y/n] ")).trim().toLowerCase();
+  rl.close();
+
+  if (start === "" || start === "y" || start === "yes") {
+    console.log("");
+    await cmdStart();
+  } else {
+    console.log("");
+    console.log(`  ready when you are: ${bold("cadmus start")}`);
+    console.log("");
+  }
+}
+
+function maskKey(k: string): string {
+  if (k.length <= 8) return "*".repeat(k.length);
+  return k.slice(0, 4) + "…" + k.slice(-4);
+}
+
+async function cmdAdd(): Promise<void> {
+  const name = args[1] ?? `agent-${Date.now().toString(36).slice(-4)}`;
+  if (!/^[a-z0-9_-]+$/i.test(name)) {
+    die(`invalid agent name "${name}" — use letters, digits, hyphens, underscores`);
+  }
+  const target = join(AGENTS_DIR, name);
+  if (existsSync(target)) die(`agent already exists: ${target}`);
+
+  mkdirSync(target, { recursive: true });
+  const templateDir = join(templatesDir, "agent-starter");
+  if (!existsSync(templateDir)) die(`template missing: ${templateDir}`);
+  copyRecursive(templateDir, target, { AGENT_NAME: name });
+
+  linkKernelInto(target);
+  updateConfig({ activeAgent: name });
+
+  console.log("");
+  console.log(green("✓ ") + `created ${bold(name)} at ${dim(target)}`);
+  console.log("");
+  console.log(`  ${bold("cadmus start")}     run it`);
+  console.log(`  ${bold("cadmus list")}      see all agents`);
+  console.log("");
+}
+
+interface AgentExport {
+  format: "cadmus-agent-export-1";
+  exported_at: string;
+  name: string;
+  config: string;
+  readme?: string;
+  memories?: unknown;
+  timeline?: unknown[];
+}
+
+async function cmdExport(): Promise<void> {
+  const name = args[1];
+  if (!name) die("usage: cadmus export <name> [-o <file>] [--with-timeline]");
+  const all = listAgents();
+  const match = all.find((a) => a.name === name);
+  if (!match) die(`agent not found: ${name}`);
+
+  const withTimeline = args.includes("--with-timeline");
+  const outIdx = args.indexOf("-o");
+  const outPath = outIdx > 0 && args[outIdx + 1]
+    ? resolve(process.cwd(), args[outIdx + 1])
+    : resolve(process.cwd(), `${name}.cadmus.json`);
+
+  const configContent = readFileSync(match.configPath, "utf8");
+  const readmePath = join(match.path, "README.md");
+  const readme = existsSync(readmePath) ? readFileSync(readmePath, "utf8") : undefined;
+
+  const memoriesPath = join(match.path, ".cadmus", "memories.json");
+  const memories = existsSync(memoriesPath)
+    ? JSON.parse(readFileSync(memoriesPath, "utf8")) as unknown
+    : undefined;
+
+  let timeline: unknown[] | undefined;
+  if (withTimeline) {
+    const timelineDb = join(match.path, ".cadmus", "timeline.db");
+    if (existsSync(timelineDb)) {
+      const { Timeline } = await import(
+        pathToFileURL(resolve(CLI_DIR, "packages", "kernel", "dist", "timeline.js")).href
+      ).catch(() => import(
+        pathToFileURL(resolve(here, "..", "..", "kernel", "dist", "timeline.js")).href
+      ));
+      const t = new (Timeline as new (path: string) => { all(): unknown[]; close(): void })(timelineDb);
+      timeline = t.all();
+      t.close();
+    }
+  }
+
+  const payload: AgentExport = {
+    format: "cadmus-agent-export-1",
+    exported_at: new Date().toISOString(),
+    name,
+    config: configContent,
+    readme,
+    memories,
+    timeline,
+  };
+  writeFileSync(outPath, JSON.stringify(payload, null, 2));
+  console.log("");
+  console.log(green("✓ ") + `exported ${bold(name)} → ${dim(outPath)}`);
+  console.log(dim(`  ${memories ? "+ memories" : "no memories"}, ${timeline ? `+ timeline (${timeline.length} events)` : "no timeline"}`));
+  console.log("");
+}
+
+async function cmdImport(): Promise<void> {
+  const filePath = args[1];
+  if (!filePath) die("usage: cadmus import <file> [--as <name>]");
+  const abs = resolve(process.cwd(), filePath);
+  if (!existsSync(abs)) die(`file not found: ${abs}`);
+
+  let payload: AgentExport;
+  try {
+    payload = JSON.parse(readFileSync(abs, "utf8")) as AgentExport;
+  } catch (err) {
+    die(`could not parse export file: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (payload.format !== "cadmus-agent-export-1") {
+    die(`unrecognized export format: ${payload.format}`);
+  }
+
+  const asIdx = args.indexOf("--as");
+  const targetName = asIdx > 0 && args[asIdx + 1] ? args[asIdx + 1] : payload.name;
+  if (!/^[a-z0-9_-]+$/i.test(targetName)) {
+    die(`invalid name "${targetName}" — letters, digits, hyphens, underscores only`);
+  }
+  const target = join(AGENTS_DIR, targetName);
+  if (existsSync(target)) {
+    die(`agent already exists: ${targetName}\n  pick a new name with --as <name>`);
+  }
+
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "cadmus.config.ts"), payload.config);
+  if (payload.readme) writeFileSync(join(target, "README.md"), payload.readme);
+
+  if (payload.memories) {
+    mkdirSync(join(target, ".cadmus"), { recursive: true });
+    writeFileSync(
+      join(target, ".cadmus", "memories.json"),
+      JSON.stringify(payload.memories, null, 2),
+    );
+  }
+
+  // Note: importing the timeline is intentionally skipped for V0.1 — replaying
+  // events into a fresh DB requires kernel awareness we haven't built yet.
+  // The export carries the events; future versions will replay them.
+
+  linkKernelInto(target);
+  updateConfig({ activeAgent: targetName });
+
+  console.log("");
+  console.log(green("✓ ") + `imported as ${bold(targetName)}`);
+  console.log(dim(`  ${target}`));
+  if (payload.timeline) {
+    console.log(yellow("  ⚠ ") + `${payload.timeline.length} timeline events in the file were not replayed`);
+    console.log(dim("    (timeline replay is a future feature — config + memories were imported)"));
+  }
+  console.log("");
+  console.log(`  ${bold("cadmus start")}     run it`);
+  console.log("");
+}
+
+async function cmdRm(): Promise<void> {
+  const name = args[1];
+  if (!name) die("usage: cadmus rm <name>");
+  const target = join(AGENTS_DIR, name);
+  if (!existsSync(target)) die(`agent not found: ${name}`);
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await rl.question(`  Move ${bold(name)} to trash? [y/N] `)).trim().toLowerCase();
+  rl.close();
+  if (answer !== "y" && answer !== "yes") {
+    console.log(dim("  cancelled"));
+    return;
+  }
+
+  const trash = trashDir();
+  const dest = join(trash, `cadmus-agent-${name}-${Date.now()}`);
+  mkdirSync(trash, { recursive: true });
+  renameSync(target, dest);
+
+  // Clear active if it was this one.
+  const config = readConfig();
+  if (config.activeAgent === name) {
+    const remaining = listAgents();
+    updateConfig({ activeAgent: remaining[0]?.name });
+  }
+
+  console.log(green("✓ ") + `moved to ${dim(dest)}`);
+}
+
+async function cmdUninstall(): Promise<void> {
+  if (!existsSync(CADMUS_HOME)) {
+    console.log("nothing to uninstall");
+    return;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  console.log("");
+  console.log(yellow(`  This will move ${CADMUS_HOME} to trash.`));
+  console.log(yellow("  Your agents and timelines will be preserved there until you empty trash."));
+  const answer = (await rl.question("  Continue? [y/N] ")).trim().toLowerCase();
+  rl.close();
+  if (answer !== "y" && answer !== "yes") {
+    console.log(dim("  cancelled"));
+    return;
+  }
+
+  const trash = trashDir();
+  mkdirSync(trash, { recursive: true });
+  const dest = join(trash, `cadmus-${Date.now()}`);
+  renameSync(CADMUS_HOME, dest);
+
+  // Best-effort: also remove the symlinked binary from PATH dirs.
+  for (const d of ["/opt/homebrew/bin/cadmus", "/usr/local/bin/cadmus", `${process.env.HOME}/.local/bin/cadmus`]) {
+    try {
+      if (existsSync(d)) {
+        const fs = await import("node:fs");
+        fs.unlinkSync(d);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  console.log(green("✓ ") + `moved to ${dim(dest)}`);
+  console.log(dim("  the cadmus command is no longer linked"));
+}
+
+function trashDir(): string {
+  const home = process.env.HOME ?? "/tmp";
+  if (process.platform === "darwin") return join(home, ".Trash");
+  // Linux XDG-ish; macOS handles ~/.Trash natively.
+  return join(home, ".local", "share", "Trash", "files");
+}
+
+async function cmdInspect(): Promise<void> {
+  const active = getActiveAgent();
+  if (!active) die("no active agent");
+  const dbPath = process.env.CADMUS_TIMELINE ?? join(active.path, ".cadmus", "timeline.db");
+  if (!existsSync(dbPath)) die(`no timeline at ${dbPath}`);
+  const { Timeline } = await import(
+    pathToFileURL(resolve(CLI_DIR, "packages", "kernel", "dist", "timeline.js")).href
+  ).catch(() => import(
+    pathToFileURL(resolve(here, "..", "..", "kernel", "dist", "timeline.js")).href
+  ));
+  const t = new (Timeline as new (path: string) => { all(): unknown[]; close(): void })(dbPath);
+  console.log(JSON.stringify(t.all(), null, 2));
+  t.close();
+}
+
+async function cmdDev(): Promise<void> {
+  // Old-style: explicit config file path. Mostly for headless / CI.
+  const configPath = args[1] ? resolve(process.cwd(), args[1]) : null;
+  if (!configPath || !existsSync(configPath)) die("usage: cadmus dev <path/to/cadmus.config.ts>");
+  const port = Number(process.env.CADMUS_PORT ?? "4000");
+  const tsxBin = resolveTsxBin();
+  const runnerScript = resolve(here, "runner.js");
+  const env = applyApiKeysToEnv(process.env);
+  const child = spawn(tsxBin, [runnerScript, configPath, String(port), "dev"], {
+    stdio: "inherit",
+    env,
+  });
+  child.on("exit", (code) => process.exit(code ?? 0));
+}
+
+// ── dispatch ────────────────────────────────────────────────────────────
+
+(async () => {
+  switch (cmd) {
+    case "start":
+      return cmdStart();
+    case "stop":
+      return cmdStop();
+    case "list":
+    case "ls":
+      return cmdList();
+    case "use":
+    case "switch":
+      return cmdUse();
+    case "setup":
+    case "config":
+      return cmdSetup();
+    case "add":
+    case "init":
+      return cmdAdd();
+    case "rm":
+    case "remove":
+    case "delete":
+      return cmdRm();
+    case "export":
+      return cmdExport();
+    case "import":
+      return cmdImport();
+    case "uninstall":
+      return cmdUninstall();
+    case "inspect":
+      return cmdInspect();
+    case "dev":
+      return cmdDev();
+    case "version":
+    case "--version":
+    case "-v":
+      return printVersion();
+    case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+      process.stdout.write(HELP);
+      return;
+    default:
+      console.error(red("unknown command: ") + cmd);
+      process.stdout.write(HELP);
+      process.exit(1);
+  }
+})().catch((err: unknown) => {
+  console.error(red("✗ ") + (err instanceof Error ? err.message : String(err)));
+  process.exit(1);
+});
