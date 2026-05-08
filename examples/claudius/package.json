@@ -6,6 +6,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cadmus/kernel": "0.1.0"
+    "@cadmus/kernel": "0.1.0",
+    "@cadmus/tools": "0.1.0"
   }
 }

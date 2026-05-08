@@ -9,6 +9,7 @@
     "inspect": "cadmus inspect"
   },
   "dependencies": {
-    "@cadmus/kernel": "*"
+    "@cadmus/kernel": "*",
+    "@cadmus/tools": "*"
   }
 }

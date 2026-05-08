@@ -88,9 +88,12 @@ seed_agent() {
   # Copy the agent's config + readme + env example.
   cp "$example_dir/cadmus.config.ts" "$target_dir/cadmus.config.ts"
   [ -f "$example_dir/README.md" ] && cp "$example_dir/README.md" "$target_dir/README.md"
-  # Symlink @cadmus/kernel so the agent's imports resolve.
+  # Symlink the framework packages so the agent's imports resolve.
   mkdir -p "$target_dir/node_modules/@cadmus"
   ln -sfn "$CLI_DIR/packages/kernel" "$target_dir/node_modules/@cadmus/kernel"
+  if [ -d "$CLI_DIR/packages/tools" ]; then
+    ln -sfn "$CLI_DIR/packages/tools" "$target_dir/node_modules/@cadmus/tools"
+  fi
   green "    ✓ installed $agent_name\n"
 }
 

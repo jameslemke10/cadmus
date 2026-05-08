@@ -29,6 +29,7 @@ export const CLI_DIR = join(CADMUS_HOME, "cli");
 export const AGENTS_DIR = join(CADMUS_HOME, "agents");
 export const CONFIG_PATH = join(CADMUS_HOME, "config.json");
 export const KERNEL_DIR = join(CLI_DIR, "packages", "kernel");
+export const TOOLS_DIR = join(CLI_DIR, "packages", "tools");
 
 export interface CadmusConfig {
   activeAgent?: string;
@@ -110,17 +111,26 @@ export function getActiveAgent(): AgentEntry | null {
   return active ?? all[0];
 }
 
-/** Symlink @cadmus/kernel into an agent's node_modules so its config can `import` it. */
+/**
+ * Symlink @cadmus/kernel and @cadmus/tools into an agent's node_modules so
+ * its config can `import` them without a separate npm install.
+ */
 export function linkKernelInto(agentDir: string): void {
-  if (!existsSync(KERNEL_DIR)) return;
   const scope = join(agentDir, "node_modules", "@cadmus");
   mkdirSync(scope, { recursive: true });
-  const linkPath = join(scope, "kernel");
-  if (existsSync(linkPath)) return;
-  try {
-    symlinkSync(KERNEL_DIR, linkPath, "dir");
-  } catch {
-    // ignore — non-fatal
+
+  for (const [name, src] of [
+    ["kernel", KERNEL_DIR],
+    ["tools", TOOLS_DIR],
+  ] as const) {
+    if (!existsSync(src)) continue;
+    const linkPath = join(scope, name);
+    if (existsSync(linkPath)) continue;
+    try {
+      symlinkSync(src, linkPath, "dir");
+    } catch {
+      // ignore — non-fatal
+    }
   }
 }
 

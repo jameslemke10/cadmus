@@ -11,9 +11,10 @@
   ],
   "scripts": {
     "kernel:build": "npm run build --workspace=@cadmus/kernel",
+    "tools:build": "npm run build --workspace=@cadmus/tools",
     "cli:build": "npm run build --workspace=@cadmus/cli",
     "studio:dev": "npm run dev --workspace=@cadmus/studio",
-    "build": "npm run kernel:build && npm run cli:build",
+    "build": "npm run kernel:build && npm run tools:build && npm run cli:build",
     "start": "node packages/cli/dist/cli.js start"
   },
   "devDependencies": {

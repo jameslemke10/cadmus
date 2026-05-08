@@ -99,6 +99,44 @@ A processor declares which tools it can call by listing their names in `tools: [
 
 ---
 
+## Built-in tools (`@cadmus/tools`)
+
+Cadmus ships a tools package with batteries included. Agents opt in by listing the tools they want — same shape as iPhone's built-in apps. Each tool is a small TypeScript file; the contribution surface is wide open.
+
+| Subpath | Tools | What |
+|---|---|---|
+| `@cadmus/tools/memory` | `memory_search`, `memory_write`, `memory_list` | JSON-backed persistent store. Survives restarts. |
+| `@cadmus/tools/web` | `web_search`, `web_fetch` | DuckDuckGo by default; Brave with `BRAVE_SEARCH_API_KEY`. |
+| `@cadmus/tools/fs` | `read_file`, `write_file`, `list_dir` | Sandboxed to `process.cwd()` by default. |
+| `@cadmus/tools/shell` | `bash` | Disabled by default — opt in with `{ enabled: true }`. Timeouts + allowlist. |
+| `@cadmus/tools/time` | `get_current_time`, `sleep` | The basics. |
+| `@cadmus/tools/mcp` | `mcp_search`, `mcp_list`, `mcp_call` | **Stubs.** Three meta-tools for runtime MCP discovery. Real implementation is the next big chunk. |
+
+```ts
+import { defineAgent, defineProcessor } from "@cadmus/kernel";
+import { webSearch, webFetch } from "@cadmus/tools/web";
+import { createMemoryStore } from "@cadmus/tools/memory";
+
+const memory = createMemoryStore();
+// ... mount memory.memorySearch / memoryWrite / memoryList in agent tools
+```
+
+---
+
+## Three contribution surfaces
+
+Cadmus has three orthogonal extension points. Most contributions land in one of these three places:
+
+**Tools** (`@cadmus/tools`) — functions models call. Memory, web, fs, shell, time, MCP, and whatever you need to add (calendar, email, http, GitHub, Notion, etc.). Each tool is one file.
+
+**Processors** (`@cadmus/processors`, *coming soon*) — units that subscribe to events and emit events. Reusable patterns: agent-health vitals (token tracking, cost ceilings), auto-compaction, schedulers, code-review gates, eval harnesses. A code processor is ~30 lines.
+
+**Channels** (`@cadmus/channels`, *coming soon*) — adapters that bring external messages onto the timeline. Telegram, WhatsApp, Slack, Discord, iMessage, terminal, webhook. Each channel is a long-running process that authenticates once and streams.
+
+If you want to contribute, start with a tool. They're the smallest reviewable PR.
+
+---
+
 ## Server endpoints
 
 The kernel exposes a small HTTP API on port `4000` (configurable via `CADMUS_PORT`). Studio uses it; you can call it from anything.
@@ -242,6 +280,7 @@ Add it to your agent's `processors: [...]` array. The framework dispatches event
 cadmus/
 ├── packages/
 │   ├── kernel/       @cadmus/kernel  — runtime, timeline, providers, server
+│   ├── tools/        @cadmus/tools   — built-in tools (memory, web, fs, shell, time, mcp)
 │   └── cli/          @cadmus/cli     — `cadmus start/stop/setup/list/use/add/...`
 ├── apps/
 │   └── studio/       Local UI: agent sidebar + brain canvas + chat + timeline
@@ -265,16 +304,25 @@ cadmus/
 
 ## Roadmap
 
+Shipped:
 - [x] Kernel: timeline, processors, llm/code templates, HTTP+SSE server
 - [x] Provider routing: Google (Gemini) + Anthropic (Claude)
 - [x] CLI: install / start / stop / list / use / add / setup / export / import / uninstall
 - [x] Studio: brain canvas, chat, processor inspector, agent sidebar
+- [x] `@cadmus/tools` package: memory, web, fs, shell, time, mcp stubs
 - [x] Two example agents: Cadmus (brain pipeline) + Claudius (Claude-style)
-- [ ] Edit-in-UI: change a processor's prompt or model from Studio, hot-reload
-- [ ] Hot-switch: `cadmus use` from Studio without restart
-- [ ] OpenAI provider, local models via Ollama
-- [ ] Vector memory backend
-- [ ] Timeline replay on import (currently `cadmus import` drops the timeline)
+
+Next big chunks (contributors welcome):
+- [ ] **MCP client** — wire up the three `mcp_*` meta-tools to a real MCP client. Currently stubs.
+- [ ] **More providers** — OpenAI, Ollama, Groq, xAI. Each is ~80 lines.
+- [ ] **More built-in tools** — calendar, email, http, github, notion. Each is ~50 lines.
+- [ ] **`@cadmus/processors`** — vitals (token tracking + cost limits), auto-compaction, schedulers, code-review gates.
+- [ ] **`@cadmus/channels`** — Telegram, WhatsApp, Slack, Discord. Each is its own long-running process.
+- [ ] **Edit-in-UI** — change a processor's prompt or model from Studio with hot-reload.
+- [ ] **Vector memory backend** — sqlite-vec, pgvector, Pinecone wrappers.
+- [ ] **Timeline replay on import** — currently `cadmus import` drops the events.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for "good first issue"–scale tasks in each category.
 
 ## License
 

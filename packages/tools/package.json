@@ -1,0 +1,54 @@
+{
+  "name": "@cadmus/tools",
+  "version": "0.1.0",
+  "description": "Built-in tools for Cadmus agents — memory, web, filesystem, shell, time, MCP.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "default": "./dist/memory/index.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./fs": {
+      "types": "./dist/fs/index.d.ts",
+      "default": "./dist/fs/index.js"
+    },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "default": "./dist/shell/index.js"
+    },
+    "./time": {
+      "types": "./dist/time/index.d.ts",
+      "default": "./dist/time/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "default": "./dist/mcp/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@cadmus/kernel": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}
