@@ -45,7 +45,8 @@
     "dev": "tsc -p tsconfig.json --watch"
   },
   "dependencies": {
-    "@cadmus/kernel": "0.1.0"
+    "@cadmus/kernel": "0.1.0",
+    "googleapis": "^171.4.0"
   },
   "devDependencies": {
     "@types/node": "^20",
