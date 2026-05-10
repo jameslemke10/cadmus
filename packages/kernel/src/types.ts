@@ -35,12 +35,49 @@ export interface ToolContext {
   log: (msg: string, data?: unknown) => void;
 }
 
+export interface TimelineFilter {
+  types?: string[];
+  agentId?: string;
+  sessionId?: string;
+}
+
+/** Input to TimelineStore.append. id, seq, and timestamp are assigned by the store. */
+export interface AppendInput {
+  type: string;
+  agent_id: string;
+  data: Record<string, unknown>;
+  session_id?: string | null;
+  parent_event_id?: string | null;
+  tags?: string[];
+}
+
 export interface TimelineReader {
-  recent(limit: number, filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[];
+  recent(limit: number, filter?: TimelineFilter): CadmusEvent[];
   byId(id: string): CadmusEvent | null;
   latest(type: string): CadmusEvent | null;
-  all(filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[];
+  all(filter?: TimelineFilter): CadmusEvent[];
   count(): number;
+}
+
+/**
+ * The full timeline contract. Anything implementing this is a valid backend.
+ * The default SQLite-backed Timeline is the reference implementation.
+ */
+export interface TimelineStore extends TimelineReader {
+  /** Append an event. id, seq, and timestamp are assigned by the store. Resolves with the persisted event. */
+  append(input: AppendInput): Promise<CadmusEvent>;
+
+  /** Subscribe to all newly-appended events. Listeners fire after persistence. Returns an unsubscribe function. */
+  subscribe(listener: (event: CadmusEvent) => void): () => void;
+
+  /** Read events with seq > the given seq. Used for SSE catch-up. */
+  since(seq: number, limit?: number): CadmusEvent[];
+
+  /**
+   * Permanently delete events matching the filter. Returns count deleted.
+   * Refuses an empty filter (would delete everything).
+   */
+  forget(filter: TimelineFilter): Promise<number>;
 }
 
 export interface ProcessorContext {

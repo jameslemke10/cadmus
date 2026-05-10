@@ -33,7 +33,6 @@ import {
   defineAgent,
   defineProcessor,
   defineTool,
-  eventId,
   memoryId,
   type CadmusEvent,
   type ProcessorContext,
@@ -216,33 +215,17 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     });
   }
 
-  // Run any tool calls — emit tool_call and tool_result events for each, paired by call_id.
+  // Run any tool calls. The runtime auto-emits tool_call/tool_result events
+  // around every ctx.callTool invocation (paired via call_id), so we just
+  // dispatch and swallow throws — the failure is already on the timeline as
+  // a tool_result with is_error: true, and the next pipeline turn can react
+  // to it.
   if (data.tool_calls && data.tool_calls.length > 0) {
     for (const call of data.tool_calls) {
-      const callId = eventId();
-      const calledEvent = await ctx.emit("tool_call", {
-        tool: call.tool,
-        args: call.args,
-        call_id: callId,
-      });
       try {
-        const result = await ctx.callTool(call.tool, call.args);
-        await ctx.emit(
-          "tool_result",
-          { tool: call.tool, call_id: callId, result, is_error: false },
-          { parentEventId: calledEvent.id },
-        );
-      } catch (err) {
-        await ctx.emit(
-          "tool_result",
-          {
-            tool: call.tool,
-            call_id: callId,
-            error_message: err instanceof Error ? err.message : String(err),
-            is_error: true,
-          },
-          { parentEventId: calledEvent.id },
-        );
+        await ctx.callTool(call.tool, call.args);
+      } catch {
+        // Failure already recorded by the runtime's auto-emitted tool_result.
       }
     }
   }
@@ -388,11 +371,13 @@ When you are ready, call emit_pfc_response exactly once with { tool_calls: [...]
     }),
 
     // Executor — runs the tool calls from the PFC. Code processor, no LLM.
+    // tool_call and tool_result events are emitted by the runtime around
+    // ctx.callTool, not by this processor.
     defineProcessor({
       name: "executor",
       template: "code",
       filter: ["pfc_response"],
-      outputEvents: ["tool_call", "tool_result", "output"],
+      outputEvents: ["output"],
       handler: executorHandler,
     }),
   ],

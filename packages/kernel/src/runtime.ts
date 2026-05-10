@@ -13,6 +13,17 @@ import type {
 
 const DEFAULT_TIMELINE_PATH = ".cadmus/timeline.db";
 
+/** Event types that the runtime itself emits — used by validateWiring to suppress false-positive warnings. */
+const FRAMEWORK_EMITTED = new Set<string>([
+  "input",
+  "tool_call",
+  "tool_result",
+  "error",
+  // External/system events that aren't strictly framework-emitted but conventionally exist.
+  "timer_fired",
+  "notification_received",
+]);
+
 export class Runtime {
   readonly timeline: Timeline;
   readonly agentId: string;
@@ -34,12 +45,22 @@ export class Runtime {
     this.timeline = new Timeline(config.storage?.timelinePath ?? DEFAULT_TIMELINE_PATH);
     this.opts = opts;
 
-    this.validateWiring();
+    this.validate();
   }
 
-  /** Compile-time check: every processor's filter is satisfied by some emitter (or system event). */
-  private validateWiring(): void {
-    const emitted = new Set<string>(["input", "timer_fired", "notification_received"]);
+  /** Runs once at construct time. Throws on hard errors; warns on soft issues. */
+  private validate(): void {
+    // Hard error: tool name uses the reserved emit_ prefix.
+    for (const name of Object.keys(this.tools)) {
+      if (name.startsWith("emit_")) {
+        throw new Error(
+          `Tool name "${name}" uses reserved prefix "emit_" (synthesized by the LLM template).`,
+        );
+      }
+    }
+
+    // Soft warn: a processor filters on an event nothing emits.
+    const emitted = new Set<string>(FRAMEWORK_EMITTED);
     for (const p of this.processors) {
       for (const e of p.outputEvents ?? []) emitted.add(e);
     }
@@ -91,17 +112,14 @@ export class Runtime {
     parent_event_id?: string | null;
     tags?: string[];
   }): Promise<CadmusEvent> {
-    const event: Omit<CadmusEvent, "seq"> = {
-      id: eventId(),
-      timestamp: new Date().toISOString(),
+    const stored = await this.timeline.append({
       type: input.type,
       agent_id: this.agentId,
-      session_id: input.session_id ?? null,
       data: input.data,
+      session_id: input.session_id ?? null,
       parent_event_id: input.parent_event_id ?? null,
       tags: input.tags ?? [],
-    };
-    const stored = this.timeline.append(event);
+    });
     this.opts.onEvent?.(stored);
     return stored;
   }
@@ -170,7 +188,46 @@ export class Runtime {
       callTool: async (name, args) => {
         const tool = this.tools[name];
         if (!tool) throw new Error(`Tool not found: ${name}`);
-        return tool.handler(args, { agentId: this.agentId, log: (m, d) => this.log(m, d) });
+
+        // Auto-emit tool_call before invocation, tool_result after.
+        // Both pair via call_id (per events-v1 spec).
+        const callId = eventId();
+        const callEvent = await this.appendEvent({
+          type: "tool_call",
+          data: { tool: name, args, call_id: callId },
+          session_id: event.session_id,
+          parent_event_id: event.id,
+          tags: [proc.name, "tool"],
+        });
+
+        try {
+          const result = await tool.handler(args, {
+            agentId: this.agentId,
+            log: (m, d) => this.log(m, d),
+          });
+          await this.appendEvent({
+            type: "tool_result",
+            data: { tool: name, call_id: callId, result, is_error: false },
+            session_id: event.session_id,
+            parent_event_id: callEvent.id,
+            tags: [proc.name, "tool"],
+          });
+          return result;
+        } catch (err) {
+          await this.appendEvent({
+            type: "tool_result",
+            data: {
+              tool: name,
+              call_id: callId,
+              error_message: err instanceof Error ? err.message : String(err),
+              is_error: true,
+            },
+            session_id: event.session_id,
+            parent_event_id: callEvent.id,
+            tags: [proc.name, "tool"],
+          });
+          throw err;
+        }
       },
       log: (m, d) => this.log(`  ${proc.name}: ${m}`, d),
     };

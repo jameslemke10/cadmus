@@ -1,7 +1,13 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { CadmusEvent, TimelineReader } from "./types.js";
+import { eventId } from "./id.js";
+import type {
+  AppendInput,
+  CadmusEvent,
+  TimelineFilter,
+  TimelineStore,
+} from "./types.js";
 
 type Row = {
   id: string;
@@ -29,7 +35,7 @@ function rowToEvent(row: Row): CadmusEvent {
   };
 }
 
-export class Timeline implements TimelineReader {
+export class Timeline implements TimelineStore {
   private db: Database.Database;
   private listeners: Set<(event: CadmusEvent) => void> = new Set();
 
@@ -66,7 +72,17 @@ export class Timeline implements TimelineReader {
     this.db.pragma("user_version = 1");
   }
 
-  append(event: Omit<CadmusEvent, "seq">): CadmusEvent {
+  async append(input: AppendInput): Promise<CadmusEvent> {
+    const event: Omit<CadmusEvent, "seq"> = {
+      id: eventId(),
+      timestamp: new Date().toISOString(),
+      type: input.type,
+      agent_id: input.agent_id,
+      session_id: input.session_id ?? null,
+      data: input.data,
+      parent_event_id: input.parent_event_id ?? null,
+      tags: input.tags ?? [],
+    };
     const stmt = this.db.prepare(`
       INSERT INTO events (id, timestamp, type, agent_id, session_id, data, parent_event_id, tags)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -101,22 +117,8 @@ export class Timeline implements TimelineReader {
     };
   }
 
-  recent(limit: number, filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[] {
-    const clauses: string[] = [];
-    const params: unknown[] = [];
-    if (filter?.agentId) {
-      clauses.push("agent_id = ?");
-      params.push(filter.agentId);
-    }
-    if (filter?.sessionId) {
-      clauses.push("session_id = ?");
-      params.push(filter.sessionId);
-    }
-    if (filter?.types && filter.types.length > 0) {
-      clauses.push(`type IN (${filter.types.map(() => "?").join(",")})`);
-      params.push(...filter.types);
-    }
-    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  recent(limit: number, filter?: TimelineFilter): CadmusEvent[] {
+    const { where, params } = buildWhere(filter);
     const sql = `SELECT * FROM events ${where} ORDER BY seq DESC LIMIT ?`;
     const rows = this.db.prepare(sql).all(...params, limit) as Row[];
     return rows.reverse().map(rowToEvent);
@@ -134,22 +136,8 @@ export class Timeline implements TimelineReader {
     return row ? rowToEvent(row) : null;
   }
 
-  all(filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[] {
-    const clauses: string[] = [];
-    const params: unknown[] = [];
-    if (filter?.agentId) {
-      clauses.push("agent_id = ?");
-      params.push(filter.agentId);
-    }
-    if (filter?.sessionId) {
-      clauses.push("session_id = ?");
-      params.push(filter.sessionId);
-    }
-    if (filter?.types && filter.types.length > 0) {
-      clauses.push(`type IN (${filter.types.map(() => "?").join(",")})`);
-      params.push(...filter.types);
-    }
-    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  all(filter?: TimelineFilter): CadmusEvent[] {
+    const { where, params } = buildWhere(filter);
     const sql = `SELECT * FROM events ${where} ORDER BY seq ASC`;
     const rows = this.db.prepare(sql).all(...params) as Row[];
     return rows.map(rowToEvent);
@@ -167,7 +155,37 @@ export class Timeline implements TimelineReader {
     return row.c;
   }
 
+  async forget(filter: TimelineFilter): Promise<number> {
+    const { where, params } = buildWhere(filter);
+    if (!where) {
+      throw new Error("forget() requires at least one filter (refusing to delete all events)");
+    }
+    const result = this.db.prepare(`DELETE FROM events ${where}`).run(...params);
+    return Number(result.changes);
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+function buildWhere(filter?: TimelineFilter): { where: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter?.agentId) {
+    clauses.push("agent_id = ?");
+    params.push(filter.agentId);
+  }
+  if (filter?.sessionId) {
+    clauses.push("session_id = ?");
+    params.push(filter.sessionId);
+  }
+  if (filter?.types && filter.types.length > 0) {
+    clauses.push(`type IN (${filter.types.map(() => "?").join(",")})`);
+    params.push(...filter.types);
+  }
+  return {
+    where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  };
 }

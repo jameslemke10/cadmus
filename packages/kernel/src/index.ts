@@ -19,6 +19,7 @@ export { Runtime } from "./runtime.js";
 export { eventId, memoryId } from "./id.js";
 export type {
   AgentConfig,
+  AppendInput,
   CadmusEvent,
   EmitOptions,
   LLMTemplateConfig,
@@ -26,7 +27,9 @@ export type {
   ProcessorContext,
   ProcessorTemplate,
   RuntimeOptions,
+  TimelineFilter,
   TimelineReader,
+  TimelineStore,
   Tool,
   ToolContext,
 } from "./types.js";
