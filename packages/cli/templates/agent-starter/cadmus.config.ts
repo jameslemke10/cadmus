@@ -1,7 +1,7 @@
 /**
  * {{AGENT_NAME}} — your agent.
  *
- * One LLM processor. Listens for user_input, replies with agent_message.
+ * One LLM processor. Listens for input, replies with output.
  * Uses persistent memory tools from @cadmus/tools — memories survive
  * across sessions and kernel restarts.
  *
@@ -34,13 +34,17 @@ export default defineAgent({
     defineProcessor({
       name: "agent",
       template: "llm",
-      filter: ["user_input"],
+      filter: ["input"],
       tools: ["memory_search", "memory_write", "memory_list", "get_current_time"],
-      outputEvents: ["agent_message"],
+      outputEvents: ["output"],
       outputSchema: {
-        agent_message: {
+        output: {
           type: "object",
-          properties: { text: { type: "string" } },
+          properties: {
+            channel: { type: "string", default: "*" },
+            kind: { type: "string", default: "text" },
+            text: { type: "string" },
+          },
           required: ["text"],
         },
       },
@@ -56,7 +60,7 @@ Be helpful. Keep responses concise unless detail is asked for. First person, pla
 
 You have access to memory tools — call memory_search before responding when context might exist, memory_write to remember facts about the user that should carry across conversations, memory_list to see recent memories at the start of a session.
 
-When you have something to say, call emit_agent_message with { text }, then stop.`,
+When you have something to say, call emit_output with { channel: "*", kind: "text", text }, then stop. Channel "*" broadcasts to whichever channel sent the input.`,
       },
     }),
   ],

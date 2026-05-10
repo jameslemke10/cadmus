@@ -25,6 +25,8 @@ export interface ServerOptions {
 
 interface ParsedBody {
   text?: unknown;
+  channel?: unknown;
+  kind?: unknown;
   type?: unknown;
   data?: unknown;
 }
@@ -218,20 +220,22 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
       return;
     }
 
-    // POST /api/inject — { text } or { type, data }
+    // POST /api/inject — { text, channel?, kind? } or { type, data }
     if (req.method === "POST" && url.pathname === "/api/inject") {
       try {
         const body = await readJsonBody(req);
         let event: CadmusEvent;
         if (typeof body.text === "string") {
-          event = await runtime.inject(body.text);
+          const channel = typeof body.channel === "string" ? body.channel : "app";
+          const kind = typeof body.kind === "string" ? body.kind : "text";
+          event = await runtime.inject(body.text, channel, kind);
         } else if (typeof body.type === "string") {
           event = await runtime.appendEvent({
             type: body.type,
             data: (body.data as Record<string, unknown>) ?? {},
           });
         } else {
-          return json(res, 400, { error: "expected { text } or { type, data }" });
+          return json(res, 400, { error: "expected { text, channel?, kind? } or { type, data }" });
         }
         return json(res, 200, { event });
       } catch (err) {
@@ -255,7 +259,7 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
   <li><code>GET /api/agent</code></li>
   <li><code>GET /api/events</code></li>
   <li><code>GET /api/stream</code> (SSE)</li>
-  <li><code>POST /api/inject</code> { text }</li>
+  <li><code>POST /api/inject</code> { text, channel?, kind? }</li>
 </ul>
 </body></html>`,
       );

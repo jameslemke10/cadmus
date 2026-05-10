@@ -3,9 +3,9 @@
  * as we can get on top of Cadmus.
  *
  * Architecture:
- *   - One PFC processor that loops user_input → tools → agent_message.
+ *   - One PFC processor that loops input → tools → output.
  *   - Two boundary events the framework honors via `sessionEvents`:
- *       session_started        — clear the model's view of prior turns.
+ *       session_start          — clear the model's view of prior turns.
  *                                (analogous to /clear in Claude Code)
  *       conversation_compacted — collapse earlier context into a summary.
  *                                (analogous to Claude's automatic compaction)
@@ -15,7 +15,7 @@
  * Inject either boundary event from Studio's chat input or via curl:
  *   curl -X POST http://localhost:4000/api/inject \
  *     -H 'content-type: application/json' \
- *     -d '{"type":"session_started","data":{"reason":"new topic"}}'
+ *     -d '{"type":"session_start","data":{"reason":"new topic"}}'
  */
 
 import { defineAgent, defineProcessor, defineTool } from "@cadmus/kernel";
@@ -63,13 +63,17 @@ export default defineAgent({
     defineProcessor({
       name: "pfc",
       template: "llm",
-      filter: ["user_input", "tool_result", "session_started", "conversation_compacted"],
+      filter: ["input", "tool_result", "session_start", "conversation_compacted"],
       tools: ["memory_search", "memory_write", "memory_list", "get_current_time", "calculate"],
-      outputEvents: ["agent_message"],
+      outputEvents: ["output"],
       outputSchema: {
-        agent_message: {
+        output: {
           type: "object",
-          properties: { text: { type: "string" } },
+          properties: {
+            channel: { type: "string", default: "*" },
+            kind: { type: "string", default: "text" },
+            text: { type: "string" },
+          },
           required: ["text"],
         },
       },
@@ -77,15 +81,15 @@ export default defineAgent({
         model: "gemini-2.5-flash",
         contextEvents: 80,
         maxIterations: 6,
-        sessionEvents: ["session_started", "conversation_compacted"],
+        sessionEvents: ["session_start", "conversation_compacted"],
         systemPrompt: `You are Claudius — a friendly, capable assistant. You are running inside the Cadmus framework.
 
 How you operate:
-- Each turn, you see the recent timeline since the last session boundary (a session_started or conversation_compacted event). You don't see anything older. Don't reference earlier conversations directly unless you can find them via memory_search.
+- Each turn, you see the recent timeline since the last session boundary (a session_start or conversation_compacted event). You don't see anything older. Don't reference earlier conversations directly unless you can find them via memory_search.
 - You have a persistent memory that DOES survive across sessions. Search it (memory_search) when context might exist. Write to it (memory_write) when the user tells you something worth remembering — names, preferences, ongoing goals, decisions.
-- When you have something to say to the user, call emit_agent_message with { text }, then stop.
+- When you have something to say to the user, call emit_output with { channel: "*", kind: "text", text }, then stop. Channel "*" broadcasts to whichever channel sent the input.
 
-When session_started arrives, you're in a new conversation. A quick memory_list or memory_search at the start of the first response is often the right move.
+When session_start arrives, you're in a new conversation. A quick memory_list or memory_search at the start of the first response is often the right move.
 
 When conversation_compacted arrives, the system has summarized the earlier conversation into the event's data. Treat that summary as authoritative context for what came before.
 

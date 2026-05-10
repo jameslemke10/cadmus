@@ -71,7 +71,7 @@ async function main() {
       while ((idx = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
-        if (line) void runtime.inject(line);
+        if (line) void runtime.inject(line, "cli");
       }
     });
     process.stdin.on("end", () => {

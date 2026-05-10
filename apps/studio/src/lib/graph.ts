@@ -71,12 +71,12 @@ export function buildGraph(processors: ProcessorMeta[]): {
 /**
  * Group processors into layers based on event flow:
  * Layer 0 = processors whose filter is satisfied by external events
- * (user_input, notification_received, timer_fired) only.
+ * (input, notification_received, timer_fired) only.
  * Layer N = processors whose filter is satisfied by events emitted by
  * processors in layers ≤ N-1.
  */
 function layerProcessors(processors: ProcessorMeta[]): ProcessorMeta[][] {
-  const EXTERNAL_TYPES = new Set(["user_input", "notification_received", "timer_fired"]);
+  const EXTERNAL_TYPES = new Set(["input", "notification_received", "timer_fired"]);
   const byName = new Map(processors.map((p) => [p.name, p] as const));
 
   // Map event type -> processors that emit it.

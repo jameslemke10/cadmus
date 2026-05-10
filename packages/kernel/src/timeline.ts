@@ -9,6 +9,7 @@ type Row = {
   timestamp: string;
   type: string;
   agent_id: string;
+  session_id: string | null;
   data: string;
   parent_event_id: string | null;
   tags: string;
@@ -21,6 +22,7 @@ function rowToEvent(row: Row): CadmusEvent {
     timestamp: row.timestamp,
     type: row.type,
     agent_id: row.agent_id,
+    session_id: row.session_id,
     data: JSON.parse(row.data) as Record<string, unknown>,
     parent_event_id: row.parent_event_id,
     tags: JSON.parse(row.tags) as string[],
@@ -45,26 +47,36 @@ export class Timeline implements TimelineReader {
         timestamp TEXT NOT NULL,
         type TEXT NOT NULL,
         agent_id TEXT NOT NULL,
+        session_id TEXT,
         data TEXT NOT NULL,
         parent_event_id TEXT,
         tags TEXT NOT NULL DEFAULT '[]'
       );
       CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
       CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
       CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_event_id);
     `);
+    // Migration: pre-v1 timelines did not have session_id. Try to add it.
+    try {
+      this.db.exec("ALTER TABLE events ADD COLUMN session_id TEXT");
+    } catch {
+      // column already exists — fine
+    }
+    this.db.pragma("user_version = 1");
   }
 
   append(event: Omit<CadmusEvent, "seq">): CadmusEvent {
     const stmt = this.db.prepare(`
-      INSERT INTO events (id, timestamp, type, agent_id, data, parent_event_id, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (id, timestamp, type, agent_id, session_id, data, parent_event_id, tags)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const result = stmt.run(
       event.id,
       event.timestamp,
       event.type,
       event.agent_id,
+      event.session_id,
       JSON.stringify(event.data),
       event.parent_event_id,
       JSON.stringify(event.tags),
@@ -89,12 +101,16 @@ export class Timeline implements TimelineReader {
     };
   }
 
-  recent(limit: number, filter?: { types?: string[]; agentId?: string }): CadmusEvent[] {
+  recent(limit: number, filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (filter?.agentId) {
       clauses.push("agent_id = ?");
       params.push(filter.agentId);
+    }
+    if (filter?.sessionId) {
+      clauses.push("session_id = ?");
+      params.push(filter.sessionId);
     }
     if (filter?.types && filter.types.length > 0) {
       clauses.push(`type IN (${filter.types.map(() => "?").join(",")})`);
@@ -118,12 +134,16 @@ export class Timeline implements TimelineReader {
     return row ? rowToEvent(row) : null;
   }
 
-  all(filter?: { types?: string[]; agentId?: string }): CadmusEvent[] {
+  all(filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (filter?.agentId) {
       clauses.push("agent_id = ?");
       params.push(filter.agentId);
+    }
+    if (filter?.sessionId) {
+      clauses.push("session_id = ?");
+      params.push(filter.sessionId);
     }
     if (filter?.types && filter.types.length > 0) {
       clauses.push(`type IN (${filter.types.map(() => "?").join(",")})`);

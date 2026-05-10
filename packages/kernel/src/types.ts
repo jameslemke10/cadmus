@@ -11,6 +11,7 @@ export interface CadmusEvent {
   timestamp: string;
   type: string;
   agent_id: string;
+  session_id: string | null;
   data: Record<string, unknown>;
   parent_event_id: string | null;
   tags: string[];
@@ -18,10 +19,11 @@ export interface CadmusEvent {
 
 export type EmitOptions = {
   parentEventId?: string | null;
+  sessionId?: string | null;
   tags?: string[];
 };
 
-export interface ToolDefinition {
+export interface Tool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
@@ -34,10 +36,10 @@ export interface ToolContext {
 }
 
 export interface TimelineReader {
-  recent(limit: number, filter?: { types?: string[]; agentId?: string }): CadmusEvent[];
+  recent(limit: number, filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[];
   byId(id: string): CadmusEvent | null;
   latest(type: string): CadmusEvent | null;
-  all(filter?: { types?: string[]; agentId?: string }): CadmusEvent[];
+  all(filter?: { types?: string[]; agentId?: string; sessionId?: string }): CadmusEvent[];
   count(): number;
 }
 
@@ -78,15 +80,12 @@ export interface LLMTemplateConfig {
    * of these types in the context window.
    *
    * Common usage:
-   *   sessionEvents: ["session_started", "conversation_compacted"]
-   *
-   * The boundary event itself IS included in context, so the model sees
-   * (e.g.) the compaction summary or session-start marker.
+   *   sessionEvents: ["session_start", "conversation_compacted"]
    */
   sessionEvents?: string[];
 }
 
-export interface ProcessorDefinition {
+export interface Processor {
   /** Unique name. */
   name: string;
   /** "llm" or "code". */
@@ -112,9 +111,9 @@ export interface ProcessorDefinition {
 export interface AgentConfig {
   agentId: string;
   name: string;
-  /** Map of tool name -> ToolDefinition. */
-  tools?: Record<string, ToolDefinition>;
-  processors: ProcessorDefinition[];
+  /** Map of tool name -> Tool. */
+  tools?: Record<string, Tool>;
+  processors: Processor[];
   storage?: {
     /** Path to the SQLite timeline file. Default: .cadmus/timeline.db */
     timelinePath?: string;

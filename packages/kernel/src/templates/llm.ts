@@ -5,9 +5,9 @@ import type {
 } from "../providers/index.js";
 import type {
   CadmusEvent,
+  Processor,
   ProcessorContext,
-  ProcessorDefinition,
-  ToolDefinition,
+  Tool,
 } from "../types.js";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
@@ -33,7 +33,7 @@ ${JSON.stringify(event.data, null, 2)}`;
 }
 
 function buildContextMessage(
-  proc: ProcessorDefinition,
+  proc: Processor,
   triggerEvent: CadmusEvent,
   recent: CadmusEvent[],
 ): string {
@@ -62,10 +62,10 @@ function buildContextMessage(
 }
 
 export async function runLLMTemplate(
-  proc: ProcessorDefinition,
+  proc: Processor,
   event: CadmusEvent,
   ctx: ProcessorContext,
-  toolRegistry: Record<string, ToolDefinition>,
+  toolRegistry: Record<string, Tool>,
 ): Promise<void> {
   const cfg = proc.templateConfig;
   if (!cfg?.systemPrompt) {
@@ -126,7 +126,11 @@ export async function runLLMTemplate(
       if (totalEmissions === 0 && turn.text.trim()) {
         const fallbackEvent = pickTextOutputEvent(proc);
         if (fallbackEvent) {
-          await ctx.emit(fallbackEvent, { text: turn.text.trim() });
+          await ctx.emit(fallbackEvent, {
+            channel: "*",
+            kind: "text",
+            text: turn.text.trim(),
+          });
           ctx.log(`(${proc.name}) auto-emitted ${fallbackEvent} from text-only response`);
           return;
         }
@@ -188,7 +192,7 @@ export async function runLLMTemplate(
  *
  * If `sessionEvents` is provided, finds the most recent event whose type is in
  * that list and only returns events at or after it (capped at `count`). This
- * is how Claudius mirrors a Claude-style session: a `session_started` event
+ * is how Claudius mirrors a Claude-style session: a `session_start` event
  * makes the model "forget" prior turns; a `conversation_compacted` event
  * collapses earlier context into a summary.
  */
@@ -223,11 +227,10 @@ function collectRecentEvents(
  * Pick the best output event to use as a fallback when the model returned text
  * without tool-calling. Heuristic:
  *   1. An output event whose schema declares a `text: string` property.
- *   2. Otherwise, the first output event named like a message
- *      (agent_message, agent_output, message).
+ *   2. Otherwise, an output event named like a message (output, message, response).
  *   3. Otherwise, null — caller logs the text as a note.
  */
-function pickTextOutputEvent(proc: ProcessorDefinition): string | null {
+function pickTextOutputEvent(proc: Processor): string | null {
   const outputs = proc.outputEvents ?? [];
   if (outputs.length === 0) return null;
 
@@ -247,7 +250,7 @@ function pickTextOutputEvent(proc: ProcessorDefinition): string | null {
   }
 
   const messageLikely = outputs.find((e) =>
-    /^(agent_message|agent_output|message)$/.test(e),
+    /^(output|message|response)$/.test(e),
   );
   return messageLikely ?? null;
 }

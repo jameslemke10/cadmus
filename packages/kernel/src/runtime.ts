@@ -5,10 +5,10 @@ import type {
   AgentConfig,
   CadmusEvent,
   EmitOptions,
+  Processor,
   ProcessorContext,
-  ProcessorDefinition,
   RuntimeOptions,
-  ToolDefinition,
+  Tool,
 } from "./types.js";
 
 const DEFAULT_TIMELINE_PATH = ".cadmus/timeline.db";
@@ -17,8 +17,8 @@ export class Runtime {
   readonly timeline: Timeline;
   readonly agentId: string;
   readonly agentName: string;
-  readonly processors: ProcessorDefinition[];
-  readonly tools: Record<string, ToolDefinition>;
+  readonly processors: Processor[];
+  readonly tools: Record<string, Tool>;
 
   private running = false;
   private queue: CadmusEvent[] = [];
@@ -39,7 +39,7 @@ export class Runtime {
 
   /** Compile-time check: every processor's filter is satisfied by some emitter (or system event). */
   private validateWiring(): void {
-    const emitted = new Set<string>(["user_input", "timer_fired", "notification_received"]);
+    const emitted = new Set<string>(["input", "timer_fired", "notification_received"]);
     for (const p of this.processors) {
       for (const e of p.outputEvents ?? []) emitted.add(e);
     }
@@ -73,11 +73,11 @@ export class Runtime {
     }
   }
 
-  /** Inject a user_input (the typical external trigger). */
-  async inject(text: string): Promise<CadmusEvent> {
+  /** Inject an input event (the typical external trigger). */
+  async inject(text: string, channel: string = "app", kind: string = "text"): Promise<CadmusEvent> {
     return this.appendEvent({
-      type: "user_input",
-      data: { text },
+      type: "input",
+      data: { channel, kind, text },
       parent_event_id: null,
       tags: ["external"],
     });
@@ -87,6 +87,7 @@ export class Runtime {
   async appendEvent(input: {
     type: string;
     data: Record<string, unknown>;
+    session_id?: string | null;
     parent_event_id?: string | null;
     tags?: string[];
   }): Promise<CadmusEvent> {
@@ -95,6 +96,7 @@ export class Runtime {
       timestamp: new Date().toISOString(),
       type: input.type,
       agent_id: this.agentId,
+      session_id: input.session_id ?? null,
       data: input.data,
       parent_event_id: input.parent_event_id ?? null,
       tags: input.tags ?? [],
@@ -119,7 +121,7 @@ export class Runtime {
     }
   }
 
-  private async runProcessor(proc: ProcessorDefinition, event: CadmusEvent): Promise<void> {
+  private async runProcessor(proc: Processor, event: CadmusEvent): Promise<void> {
     const ctx = this.makeContext(proc, event);
     this.log(`▶ ${proc.name} <- ${event.type}`);
     try {
@@ -138,17 +140,20 @@ export class Runtime {
       await this.appendEvent({
         type: "error",
         data: {
-          processor: proc.name,
+          source: "processor",
+          name: proc.name,
           message: err instanceof Error ? err.message : String(err),
-          trigger_event_id: event.id,
+          stack: err instanceof Error ? err.stack : undefined,
+          triggering_event_id: event.id,
         },
+        session_id: event.session_id,
         parent_event_id: event.id,
         tags: ["error"],
       });
     }
   }
 
-  private makeContext(proc: ProcessorDefinition, event: CadmusEvent): ProcessorContext {
+  private makeContext(proc: Processor, event: CadmusEvent): ProcessorContext {
     return {
       agentId: this.agentId,
       processorName: proc.name,
@@ -158,6 +163,7 @@ export class Runtime {
         this.appendEvent({
           type,
           data,
+          session_id: opts.sessionId ?? event.session_id,
           parent_event_id: opts.parentEventId ?? event.id,
           tags: opts.tags ?? [proc.name],
         }),

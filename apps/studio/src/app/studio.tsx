@@ -20,15 +20,17 @@ interface KernelStatus {
 }
 
 const EVENT_COLORS: Record<string, string> = {
-  user_input: "bg-stone-900 text-white",
-  agent_message: "bg-emerald-50 text-emerald-900 border-emerald-200",
-  agent_output: "bg-emerald-50 text-emerald-900 border-emerald-200",
-  tool_called: "bg-amber-50 text-amber-900 border-amber-200",
+  input: "bg-stone-900 text-white",
+  output: "bg-emerald-50 text-emerald-900 border-emerald-200",
+  tool_call: "bg-amber-50 text-amber-900 border-amber-200",
   tool_result: "bg-amber-50 text-amber-900 border-amber-200",
+  memory_write: "bg-rose-50 text-rose-900 border-rose-200",
+  memory_delete: "bg-rose-50 text-rose-900 border-rose-200",
+  session_start: "bg-sky-50 text-sky-900 border-sky-200",
+  session_end: "bg-sky-50 text-sky-900 border-sky-200",
   pfc_response: "bg-violet-50 text-violet-900 border-violet-200",
   working_memory_updated: "bg-sky-50 text-sky-900 border-sky-200",
   memory_retrieved: "bg-rose-50 text-rose-900 border-rose-200",
-  memory_stored: "bg-rose-50 text-rose-900 border-rose-200",
   subconscious_surfaced: "bg-orange-50 text-orange-900 border-orange-200",
   subconscious_triaged: "bg-orange-50 text-orange-900 border-orange-200",
   notification_received: "bg-orange-50 text-orange-900 border-orange-200",

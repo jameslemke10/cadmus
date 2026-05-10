@@ -21,10 +21,10 @@ interface Message {
 function eventsToMessages(events: CadmusEvent[]): Message[] {
   const messages: Message[] = [];
   for (const e of events) {
-    if (e.type === "user_input") {
+    if (e.type === "input") {
       const text = (e.data as { text?: string }).text ?? "";
       if (text) messages.push({ id: e.id, role: "user", text, timestamp: e.timestamp });
-    } else if (e.type === "agent_message" || e.type === "agent_output") {
+    } else if (e.type === "output") {
       const text = (e.data as { text?: string }).text ?? "";
       if (text) messages.push({ id: e.id, role: "agent", text, timestamp: e.timestamp });
     } else if (e.type === "error") {
@@ -47,7 +47,7 @@ export function ChatPanel({ api, agent, events, connected }: Props) {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Whether the agent is currently working (last user_input not yet answered).
+  // Whether the agent is currently working (last input not yet answered).
   const pending = useMemo(() => {
     let pendingCount = 0;
     for (const m of messages) {

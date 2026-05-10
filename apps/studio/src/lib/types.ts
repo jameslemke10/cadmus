@@ -4,6 +4,7 @@ export interface CadmusEvent {
   timestamp: string;
   type: string;
   agent_id: string;
+  session_id: string | null;
   data: Record<string, unknown>;
   parent_event_id: string | null;
   tags: string[];

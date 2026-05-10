@@ -10,7 +10,7 @@
  * Architecturally: five processors mapping onto a useful slice of brain
  * function.
  *
- *   user_input ─┐
+ *   input ──────┐
  *   tool_result ┼─▶ hippocampus (llm) ─▶ memory_retrieved
  *               │   retrieves relevant memories from the store
  *               ▼
@@ -21,7 +21,7 @@
  *           pfc (llm, the conscious reasoner, has the persona) ─▶ pfc_response
  *               │   plans, reasons, decides on tool calls and responses
  *               ▼
- *           executor (code) ─▶ tool_called ─▶ tool_result  OR  agent_message
+ *           executor (code) ─▶ tool_call ─▶ tool_result  OR  output
  *               just runs the actions, no LLM
  *
  * For the boring single-processor agent that mirrors current frameworks,
@@ -33,10 +33,11 @@ import {
   defineAgent,
   defineProcessor,
   defineTool,
+  eventId,
+  memoryId,
   type CadmusEvent,
   type ProcessorContext,
 } from "@cadmus/kernel";
-import { memoryId } from "@cadmus/kernel";
 
 // -- In-memory tier-blind memory store ---------------------------------------
 
@@ -206,23 +207,29 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     response_to_user?: string;
   };
 
-  // If the PFC produced a user-facing message, emit it.
+  // If the PFC produced a user-facing message, emit it as output.
   if (data.response_to_user && data.response_to_user.trim()) {
-    await ctx.emit("agent_message", { text: data.response_to_user });
+    await ctx.emit("output", {
+      channel: "*",
+      kind: "text",
+      text: data.response_to_user,
+    });
   }
 
-  // Run any tool calls — emit tool_called and tool_result events for each.
+  // Run any tool calls — emit tool_call and tool_result events for each, paired by call_id.
   if (data.tool_calls && data.tool_calls.length > 0) {
     for (const call of data.tool_calls) {
-      const calledEvent = await ctx.emit("tool_called", {
+      const callId = eventId();
+      const calledEvent = await ctx.emit("tool_call", {
         tool: call.tool,
         args: call.args,
+        call_id: callId,
       });
       try {
         const result = await ctx.callTool(call.tool, call.args);
         await ctx.emit(
           "tool_result",
-          { tool: call.tool, args: call.args, result, success: true },
+          { tool: call.tool, call_id: callId, result, is_error: false },
           { parentEventId: calledEvent.id },
         );
       } catch (err) {
@@ -230,9 +237,9 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
           "tool_result",
           {
             tool: call.tool,
-            args: call.args,
-            error: err instanceof Error ? err.message : String(err),
-            success: false,
+            call_id: callId,
+            error_message: err instanceof Error ? err.message : String(err),
+            is_error: true,
           },
           { parentEventId: calledEvent.id },
         );
@@ -257,7 +264,7 @@ export default defineAgent({
     defineProcessor({
       name: "hippocampus",
       template: "llm",
-      filter: ["user_input", "tool_result", "subconscious_surfaced"],
+      filter: ["input", "tool_result", "subconscious_surfaced"],
       tools: ["memory_search"],
       outputEvents: ["memory_retrieved"],
       outputSchema: {
@@ -320,7 +327,7 @@ Be parsimonious. Three searches max. The downstream thalamus will decide what ma
         model: "gemini-2.5-flash",
         contextEvents: 20,
         systemPrompt: `You are the THALAMUS of a Cadmus agent.
-Your job: assemble working memory for the PFC. Given the timeline (recent events including memory_retrieved, user_input, tool_result, prior working memory), produce a single working_memory_updated event.
+Your job: assemble working memory for the PFC. Given the timeline (recent events including memory_retrieved, input, tool_result, prior working memory), produce a single working_memory_updated event.
 
 Compress the conversation history. Identify the current goal. Surface the 2-5 most relevant memories. Note any recent tool results. Be concise — every token matters because this is what the PFC sees.
 
@@ -385,7 +392,7 @@ When you are ready, call emit_pfc_response exactly once with { tool_calls: [...]
       name: "executor",
       template: "code",
       filter: ["pfc_response"],
-      outputEvents: ["tool_called", "tool_result", "agent_message"],
+      outputEvents: ["tool_call", "tool_result", "output"],
       handler: executorHandler,
     }),
   ],

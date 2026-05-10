@@ -22,28 +22,25 @@ export type {
   CadmusEvent,
   EmitOptions,
   LLMTemplateConfig,
+  Processor,
   ProcessorContext,
-  ProcessorDefinition,
   ProcessorTemplate,
   RuntimeOptions,
   TimelineReader,
+  Tool,
   ToolContext,
-  ToolDefinition,
 } from "./types.js";
 
 export { startServer } from "./server.js";
 export type { ServerOptions } from "./server.js";
 
-/**
- * Helper for defining a processor with type narrowing.
- */
-import type { ProcessorDefinition } from "./types.js";
-export function defineProcessor(p: ProcessorDefinition): ProcessorDefinition {
+import type { Processor } from "./types.js";
+export function defineProcessor(p: Processor): Processor {
   return p;
 }
 
-import type { ToolDefinition } from "./types.js";
-export function defineTool(t: ToolDefinition): ToolDefinition {
+import type { Tool } from "./types.js";
+export function defineTool(t: Tool): Tool {
   return t;
 }
 
