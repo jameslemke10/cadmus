@@ -8,6 +8,8 @@
  *     emit_<type> tools) and `code` (a developer-supplied handler).
  *   - Tools: ordinary callable functions. Any processor can declare which
  *     tools it has access to.
+ *   - Channels: bridges between an external system (CLI, Studio, Slack,
+ *     etc.) and the timeline. Emit `input`, route `output`.
  *
  * The "brain" preset (hippocampus -> thalamus -> PFC -> executor) is one
  * configuration on top of these primitives. The framework knows nothing
@@ -17,10 +19,14 @@
 export { Timeline } from "./timeline.js";
 export { Runtime } from "./runtime.js";
 export { eventId, memoryId } from "./id.js";
+export { createCliChannel } from "./channels/cli.js";
+export type { CliChannelOptions } from "./channels/cli.js";
 export type {
   AgentConfig,
   AppendInput,
   CadmusEvent,
+  Channel,
+  ChannelContext,
   EmitOptions,
   LLMTemplateConfig,
   Processor,

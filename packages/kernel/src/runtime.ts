@@ -4,6 +4,8 @@ import { Timeline } from "./timeline.js";
 import type {
   AgentConfig,
   CadmusEvent,
+  Channel,
+  ChannelContext,
   EmitOptions,
   Processor,
   ProcessorContext,
@@ -30,6 +32,7 @@ export class Runtime {
   readonly agentName: string;
   readonly processors: Processor[];
   readonly tools: Record<string, Tool>;
+  readonly channels: Channel[];
 
   private running = false;
   private queue: CadmusEvent[] = [];
@@ -42,6 +45,7 @@ export class Runtime {
     this.agentName = config.name;
     this.processors = config.processors;
     this.tools = config.tools ?? {};
+    this.channels = config.channels ?? [];
     this.timeline = new Timeline(config.storage?.timelinePath ?? DEFAULT_TIMELINE_PATH);
     this.opts = opts;
 
@@ -57,6 +61,15 @@ export class Runtime {
           `Tool name "${name}" uses reserved prefix "emit_" (synthesized by the LLM template).`,
         );
       }
+    }
+
+    // Hard error: duplicate channel names.
+    const seenChannels = new Set<string>();
+    for (const ch of this.channels) {
+      if (seenChannels.has(ch.name)) {
+        throw new Error(`Duplicate channel name "${ch.name}".`);
+      }
+      seenChannels.add(ch.name);
     }
 
     // Soft warn: a processor filters on an event nothing emits.
@@ -75,19 +88,40 @@ export class Runtime {
     }
   }
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
     this.unsubscribe = this.timeline.subscribe((event) => {
       this.queue.push(event);
       void this.drain();
     });
+
+    // Start channels.
+    for (const ch of this.channels) {
+      try {
+        await ch.start(this.makeChannelContext(ch));
+        this.log(`channel "${ch.name}" started`);
+      } catch (err) {
+        this.log(`channel "${ch.name}" failed to start: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     this.log(`runtime started (agent=${this.agentName} id=${this.agentId})`);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+
+    // Stop channels first so they release resources before we tear down the queue.
+    for (const ch of this.channels) {
+      try {
+        await ch.stop();
+      } catch (err) {
+        this.log(`channel "${ch.name}" stop error: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     if (this.unsubscribe) {
       this.unsubscribe();
       this.unsubscribe = null;
@@ -230,6 +264,21 @@ export class Runtime {
         }
       },
       log: (m, d) => this.log(`  ${proc.name}: ${m}`, d),
+    };
+  }
+
+  private makeChannelContext(channel: Channel): ChannelContext {
+    return {
+      agentId: this.agentId,
+      timeline: this.timeline,
+      emit: async (type, data) =>
+        this.appendEvent({
+          type,
+          data,
+          tags: [`channel:${channel.name}`],
+        }),
+      subscribe: (listener) => this.timeline.subscribe(listener),
+      log: (m, d) => this.log(`  channel:${channel.name}: ${m}`, d),
     };
   }
 

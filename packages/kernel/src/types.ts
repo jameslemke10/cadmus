@@ -145,12 +145,52 @@ export interface Processor {
   config?: Record<string, unknown>;
 }
 
+/**
+ * What a Channel sees from the runtime: emit, subscribe, read-only timeline,
+ * and a logger. Channels do NOT have direct callTool access — they interact
+ * with the agent purely through events.
+ */
+export interface ChannelContext {
+  agentId: string;
+  timeline: TimelineReader;
+  /** Emit an event onto the timeline. The runtime fills in agent_id / id / seq / timestamp. */
+  emit: (type: string, data: Record<string, unknown>) => Promise<CadmusEvent>;
+  /** Subscribe to all newly-appended events. Returns an unsubscribe function. */
+  subscribe: (listener: (event: CadmusEvent) => void) => () => void;
+  log: (msg: string, data?: unknown) => void;
+}
+
+/**
+ * A Channel bridges between an external system (CLI, Studio, Slack, etc.)
+ * and the timeline. Channels emit `input` events when external traffic
+ * arrives and route `output` events whose `data.channel` matches their name
+ * (or is "*") back to the external system.
+ *
+ * See spec/channel.md for the full contract.
+ */
+export interface Channel {
+  /** Unique name. Used as the `channel` field on input/output events. */
+  name: string;
+  /** Event types this channel emits onto the timeline. Typically ["input"]. */
+  inboundEvents?: string[];
+  /** Event types this channel routes off the timeline. Typically ["output"]. */
+  outboundEvents?: string[];
+  /** Begin listening to the external system. Idempotent. */
+  start: (ctx: ChannelContext) => Promise<void>;
+  /** Stop and disconnect. Should drain in-flight work where reasonable. */
+  stop: () => Promise<void>;
+  /** Free-form per-instance config. */
+  config?: Record<string, unknown>;
+}
+
 export interface AgentConfig {
   agentId: string;
   name: string;
   /** Map of tool name -> Tool. */
   tools?: Record<string, Tool>;
   processors: Processor[];
+  /** Channels that bridge this agent to external systems. Started at runtime.start(). */
+  channels?: Channel[];
   storage?: {
     /** Path to the SQLite timeline file. Default: .cadmus/timeline.db */
     timelinePath?: string;

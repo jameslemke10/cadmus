@@ -18,15 +18,20 @@ interface Message {
   timestamp: string;
 }
 
+// Studio is the "studio" channel. It only displays inputs originating from
+// itself and outputs targeting itself (or broadcast "*"). Other channels
+// (cli, telegram, ...) have their own routing.
 function eventsToMessages(events: CadmusEvent[]): Message[] {
   const messages: Message[] = [];
   for (const e of events) {
     if (e.type === "input") {
-      const text = (e.data as { text?: string }).text ?? "";
-      if (text) messages.push({ id: e.id, role: "user", text, timestamp: e.timestamp });
+      const d = e.data as { channel?: string; text?: string };
+      if (d.channel !== "studio") continue;
+      if (d.text) messages.push({ id: e.id, role: "user", text: d.text, timestamp: e.timestamp });
     } else if (e.type === "output") {
-      const text = (e.data as { text?: string }).text ?? "";
-      if (text) messages.push({ id: e.id, role: "agent", text, timestamp: e.timestamp });
+      const d = e.data as { channel?: string; text?: string };
+      if (d.channel !== "studio" && d.channel !== "*") continue;
+      if (d.text) messages.push({ id: e.id, role: "agent", text: d.text, timestamp: e.timestamp });
     } else if (e.type === "error") {
       const msg = (e.data as { message?: string }).message ?? "(unknown error)";
       messages.push({

@@ -12,7 +12,7 @@ export async function injectMessage(api: string, text: string): Promise<void> {
   const res = await fetch(`${api}/api/inject`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, channel: "studio" }),
   });
   if (!res.ok) throw new Error(`inject failed: ${res.status}`);
 }

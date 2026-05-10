@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Runtime, startServer, type AgentConfig } from "@cadmus/kernel";
+import { Runtime, createCliChannel, startServer, type AgentConfig } from "@cadmus/kernel";
 import { listAgents, readConfig, updateConfig } from "./workspace.js";
 
 async function main() {
@@ -26,8 +26,15 @@ async function main() {
     process.exit(1);
   }
 
+  // In one-shot mode (no studio), wire stdin/stdout via the built-in CLI
+  // channel. The channel handles both reading input lines and routing
+  // output events back to stdout.
+  if (mode !== "dev") {
+    config.channels = [...(config.channels ?? []), createCliChannel()];
+  }
+
   const runtime = new Runtime(config, { verbose: true });
-  runtime.start();
+  await runtime.start();
 
   if (mode === "dev") {
     const port = Number(portArg) || 4000;
@@ -62,27 +69,17 @@ async function main() {
     console.log(`Inject:    curl -X POST http://localhost:${port}/api/inject -d '{"text":"hello"}'`);
     console.log("");
   } else {
-    // one-shot mode: read from stdin
-    process.stdin.setEncoding("utf8");
-    let buffer = "";
-    process.stdin.on("data", (chunk) => {
-      buffer += chunk;
-      let idx;
-      while ((idx = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (line) void runtime.inject(line, "cli");
-      }
-    });
+    // CLI channel reads stdin; we just need to terminate when stdin closes.
     process.stdin.on("end", () => {
       // give in-flight processors a moment, then exit
-      setTimeout(() => process.exit(0), 1000);
+      setTimeout(() => {
+        void runtime.stop().then(() => process.exit(0));
+      }, 1000);
     });
   }
 
   process.on("SIGINT", () => {
-    runtime.stop();
-    process.exit(0);
+    void runtime.stop().then(() => process.exit(0));
   });
 }
 
