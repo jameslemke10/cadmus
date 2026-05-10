@@ -190,8 +190,8 @@ export interface MemoryStore {
   get(id: string): Promise<MemoryRecord | null>;
   /** Create or update. Same id = update, new/missing = create. */
   write(input: MemoryWrite): Promise<MemoryRecord>;
-  /** Delete records matching the filter. Returns count deleted. */
-  forget(filter: MemoryFilter): Promise<number>;
+  /** Delete records matching the filter. Returns count deleted. Refuses an empty filter. */
+  delete(filter: MemoryFilter): Promise<number>;
   /** Optional observability. */
   stats?(): Promise<MemoryStats>;
   /** Optional cleanup. */

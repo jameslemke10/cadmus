@@ -238,7 +238,7 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
       };
     },
 
-    async forget(filter: MemoryFilter): Promise<number> {
+    async delete(filter: MemoryFilter): Promise<number> {
       const clauses: string[] = [];
       const params: unknown[] = [];
       if (filter.ids && filter.ids.length > 0) {
@@ -436,7 +436,7 @@ export function createMemoryTools(store: MemoryStore): Record<string, Tool> {
     },
     handler: async (args, ctx) => {
       const a = args as { ids?: string[]; kind?: string; tags?: string[]; expired?: boolean };
-      const removed = await store.forget({
+      const removed = await store.delete({
         ids: a.ids,
         kind: a.kind,
         tags: a.tags,

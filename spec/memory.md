@@ -57,9 +57,9 @@ interface MemoryStore {
 
   /**
    * Permanently delete records matching the filter. MUST emit memory_delete
-   * before resolving. Returns count deleted.
+   * before resolving. Returns count deleted. Refuses an empty filter.
    */
-  forget(filter: MemoryFilter): Promise<number>;
+  delete(filter: MemoryFilter): Promise<number>;
 
   /** Optional: counts and totals for observability. */
   stats?(): Promise<MemoryStats>;
@@ -133,7 +133,7 @@ interface MemoryStats {
 A backend is conforming only if it satisfies all of these:
 
 1. **`write()` MUST emit `memory_write`** before resolving. Without this, the timeline-as-source-of-truth invariant breaks.
-2. **`forget()` MUST emit `memory_delete`** before resolving (one event per `forget()` call, even if multiple ids are deleted).
+2. **`delete()` MUST emit `memory_delete`** before resolving (one event per `delete()` call, even if multiple ids are deleted).
 3. **`provenance.source_event_ids` is required on every record.** A memory record MUST trace to one or more timeline events. Backends MUST reject `write()` calls with empty `source_event_ids`.
 4. **`scope` is required.** Every record MUST declare scope (even if all fields are absent — the empty object `{}` is the "global" scope). `search()` MUST honor the `scope` filter when provided.
 5. **`get()` updates `last_accessed_at`.** Used for backend-internal decay and observability.
@@ -145,7 +145,7 @@ Backends MAY support these, but are not required to:
 
 - **Vector / embedding search.** Backends without embeddings degrade `search()` to full-text or substring match. `score` is whatever the backend produces, normalized to `0..1`.
 - **`stats()`.** If absent, observability tools degrade gracefully.
-- **`forget()` with non-id filters.** Some immutable backends may reject filter-based forgets and require explicit ids.
+- **`delete()` with non-id filters.** Some immutable backends may reject filter-based deletes and require explicit ids.
 
 ## Portability
 
@@ -191,7 +191,7 @@ A `MemoryStore` is conforming if it passes the `assertMemoryStoreConforms(store)
 - `write()` assigns id (if missing), timestamps, and emits `memory_write`.
 - `write()` rejects records without `provenance.source_event_ids`.
 - `write()` with same id updates rather than creates.
-- `forget()` deletes matching records, emits `memory_delete`, and the records no longer appear in `search` / `get`.
+- `delete()` deletes matching records, emits `memory_delete`, and the records no longer appear in `search` / `get`.
 - `get()` updates `last_accessed_at`.
 - `search()` honors `scope`, `kind`, and `tags` filters.
 - Replaying `memory_write` and `memory_delete` events into a fresh store produces an equivalent visible state (rebuildability).
