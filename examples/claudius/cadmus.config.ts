@@ -9,8 +9,9 @@
  *                                (analogous to /clear in Claude Code)
  *       conversation_compacted — collapse earlier context into a summary.
  *                                (analogous to Claude's automatic compaction)
- *   - Persistent memory in .cadmus/memories.json — survives kernel restarts
- *     and session boundaries.
+ *   - Persistent memory in .cadmus/memory.db (SQLite) — survives kernel
+ *     restarts and session boundaries. The canonical memory_search /
+ *     memory_write / memory_delete tools come from @cadmus/tools/memory.
  *
  * Inject either boundary event from Studio's chat input or via curl:
  *   curl -X POST http://localhost:4000/api/inject \
@@ -19,12 +20,12 @@
  */
 
 import { defineAgent, defineProcessor, defineTool } from "@cadmus/kernel";
-import { createMemoryStore } from "@cadmus/tools/memory";
+import { createMemory } from "@cadmus/tools/memory";
 import { getCurrentTime } from "@cadmus/tools/time";
 
-// ── Persistent memory store (provided by @cadmus/tools/memory) ───────────
+// ── Persistent SQLite-backed memory store + canonical tools ──────────────
 
-const memory = createMemoryStore({ path: ".cadmus/memories.json" });
+const memory = createMemory({ path: ".cadmus/memory.db" });
 
 // ── A small "real" tool the PFC can call ─────────────────────────────────
 
@@ -53,9 +54,7 @@ export default defineAgent({
   agentId: "claudius",
   name: "Claudius",
   tools: {
-    memory_search: memory.memorySearch,
-    memory_write: memory.memoryWrite,
-    memory_list: memory.memoryList,
+    ...memory.tools,           // memory_search, memory_write, memory_delete
     get_current_time: getCurrentTime,
     calculate,
   },
@@ -64,7 +63,7 @@ export default defineAgent({
       name: "pfc",
       template: "llm",
       filter: ["input", "tool_result", "session_start", "conversation_compacted"],
-      tools: ["memory_search", "memory_write", "memory_list", "get_current_time", "calculate"],
+      tools: ["memory_search", "memory_write", "memory_delete", "get_current_time", "calculate"],
       outputEvents: ["output"],
       outputSchema: {
         output: {
@@ -86,10 +85,14 @@ export default defineAgent({
 
 How you operate:
 - Each turn, you see the recent timeline since the last session boundary (a session_start or conversation_compacted event). You don't see anything older. Don't reference earlier conversations directly unless you can find them via memory_search.
-- You have a persistent memory that DOES survive across sessions. Search it (memory_search) when context might exist. Write to it (memory_write) when the user tells you something worth remembering — names, preferences, ongoing goals, decisions.
+- You have a persistent memory that DOES survive across sessions. Three kinds:
+  - "procedural" — skills and how-to ("when user asks X, do Y")
+  - "semantic"   — facts about the user / world (use tags: ["identity"] for facts about yourself)
+  - "episodic"   — events ("on date X, user said Y")
+- Search memory (memory_search) when context might exist; write (memory_write) when the user tells you something worth remembering; delete (memory_delete) when something is no longer true.
 - When you have something to say to the user, call emit_output with { channel: "*", kind: "text", text }, then stop. Channel "*" broadcasts to whichever channel sent the input.
 
-When session_start arrives, you're in a new conversation. A quick memory_list or memory_search at the start of the first response is often the right move.
+When session_start arrives, you're in a new conversation. A quick memory_search at the start of the first response is often the right move.
 
 When conversation_compacted arrives, the system has summarized the earlier conversation into the event's data. Treat that summary as authoritative context for what came before.
 

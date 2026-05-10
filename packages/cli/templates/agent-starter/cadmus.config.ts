@@ -2,8 +2,9 @@
  * {{AGENT_NAME}} — your agent.
  *
  * One LLM processor. Listens for input, replies with output.
- * Uses persistent memory tools from @cadmus/tools — memories survive
- * across sessions and kernel restarts.
+ * Persistent memory lives in .cadmus/memory.db (SQLite). The canonical
+ * memory_search / memory_write / memory_delete tools come from
+ * @cadmus/tools/memory.
  *
  * For pre-built examples:
  *   cadmus    — flagship brain pipeline (hippocampus → thalamus → PFC → executor)
@@ -16,26 +17,24 @@
  */
 
 import { defineAgent, defineProcessor } from "@cadmus/kernel";
-import { createMemoryStore } from "@cadmus/tools/memory";
+import { createMemory } from "@cadmus/tools/memory";
 import { getCurrentTime } from "@cadmus/tools/time";
 
-const memory = createMemoryStore();
+const memory = createMemory({ path: ".cadmus/memory.db" });
 
 export default defineAgent({
   agentId: "{{AGENT_NAME}}",
   name: "{{AGENT_NAME}}",
   tools: {
-    memory_search: memory.memorySearch,
-    memory_write: memory.memoryWrite,
-    memory_list: memory.memoryList,
+    ...memory.tools,           // memory_search, memory_write, memory_delete
     get_current_time: getCurrentTime,
   },
   processors: [
     defineProcessor({
       name: "agent",
       template: "llm",
-      filter: ["input"],
-      tools: ["memory_search", "memory_write", "memory_list", "get_current_time"],
+      filter: ["input", "tool_result"],
+      tools: ["memory_search", "memory_write", "memory_delete", "get_current_time"],
       outputEvents: ["output"],
       outputSchema: {
         output: {
@@ -58,7 +57,7 @@ export default defineAgent({
 
 Be helpful. Keep responses concise unless detail is asked for. First person, plainspoken.
 
-You have access to memory tools — call memory_search before responding when context might exist, memory_write to remember facts about the user that should carry across conversations, memory_list to see recent memories at the start of a session.
+You have access to memory tools — call memory_search before responding when context might exist, memory_write to remember facts about the user (use kind: "semantic"), procedures (kind: "procedural"), or events (kind: "episodic"). Use memory_delete to forget something that's no longer true.
 
 When you have something to say, call emit_output with { channel: "*", kind: "text", text }, then stop. Channel "*" broadcasts to whichever channel sent the input.`,
       },

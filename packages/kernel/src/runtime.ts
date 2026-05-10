@@ -20,6 +20,8 @@ const FRAMEWORK_EMITTED = new Set<string>([
   "input",
   "tool_call",
   "tool_result",
+  "memory_write",
+  "memory_delete",
   "error",
   // External/system events that aren't strictly framework-emitted but conventionally exist.
   "timer_fired",
@@ -237,6 +239,15 @@ export class Runtime {
         try {
           const result = await tool.handler(args, {
             agentId: this.agentId,
+            triggerEvent: event,
+            emit: async (type, data, opts: EmitOptions = {}) =>
+              this.appendEvent({
+                type,
+                data,
+                session_id: opts.sessionId ?? event.session_id,
+                parent_event_id: opts.parentEventId ?? callEvent.id,
+                tags: opts.tags ?? [`tool:${name}`],
+              }),
             log: (m, d) => this.log(m, d),
           });
           await this.appendEvent({

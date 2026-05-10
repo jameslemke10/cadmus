@@ -10,7 +10,8 @@
     "run": "node ../../packages/cli/dist/cli.js run cadmus.config.ts"
   },
   "dependencies": {
-    "@cadmus/kernel": "0.1.0"
+    "@cadmus/kernel": "0.1.0",
+    "@cadmus/tools": "0.1.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

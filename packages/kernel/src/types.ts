@@ -32,6 +32,12 @@ export interface Tool {
 
 export interface ToolContext {
   agentId: string;
+  /** The event that triggered the processor that called this tool. Lets tools
+   *  default things like memory provenance, session_id, parent_event_id. */
+  triggerEvent: CadmusEvent;
+  /** Emit a new event onto the timeline. By default, parent_event_id is the
+   *  surrounding tool_call and session_id inherits from the trigger. */
+  emit: (type: string, data: Record<string, unknown>, opts?: EmitOptions) => Promise<CadmusEvent>;
   log: (msg: string, data?: unknown) => void;
 }
 
@@ -79,6 +85,120 @@ export interface TimelineStore extends TimelineReader {
    */
   forget(filter: TimelineFilter): Promise<number>;
 }
+
+// ──── Memory ──────────────────────────────────────────────────────────────
+
+/**
+ * Provenance — where a memory came from. Mandatory on every record so that
+ * the timeline-as-source-of-truth invariant holds: every memory traces back
+ * to events that produced it.
+ */
+export interface MemoryProvenance {
+  /** Timeline events that produced this memory. Required, non-empty. */
+  source_event_ids: string[];
+  /** Who wrote it. Convention: "tool:<name>" | "processor:<name>" | "mcp:<server>". */
+  writer: string;
+}
+
+export interface MemoryScope {
+  tenant_id?: string;
+  agent_id?: string;
+  session_id?: string;
+}
+
+/**
+ * A memory record. The portable subset of these fields round-trips across
+ * backends; backend-specific data (embeddings, internal indexes) is not
+ * exposed here.
+ */
+export interface MemoryRecord {
+  id: string;
+  /** Canonical: "procedural" | "semantic" | "episodic". Custom kinds allowed. */
+  kind: string;
+  content: string;
+  scope: MemoryScope;
+  tags: string[];
+  /** 0..1. Used for ranking and decay. */
+  importance: number;
+  created_at: string;
+  last_accessed_at: string;
+  expires_at?: string;
+  provenance: MemoryProvenance;
+}
+
+/** Input to MemoryStore.write. id is optional (omit to create, supply to update). */
+export interface MemoryWrite {
+  id?: string;
+  kind: string;
+  content: string;
+  scope?: MemoryScope;
+  tags?: string[];
+  importance?: number;
+  expires_at?: string;
+  provenance: MemoryProvenance;
+}
+
+export interface MemorySearchArgs {
+  query: string;
+  kind?: string;
+  scope?: MemoryScope;
+  tags?: string[];
+  /** Default 10. */
+  limit?: number;
+  /** Default 0. Score is normalized 0..1. */
+  min_score?: number;
+}
+
+export interface MemorySearchHit extends MemoryRecord {
+  /** 0..1, backend-defined ranking, normalized. */
+  score: number;
+}
+
+export interface MemoryFilter {
+  ids?: string[];
+  kind?: string;
+  scope?: MemoryScope;
+  tags?: string[];
+  /** Match records whose expires_at is in the past. */
+  expired?: boolean;
+}
+
+export interface MemoryStats {
+  count_by_kind: Record<string, number>;
+  oldest?: string;
+  newest?: string;
+  total_bytes?: number;
+}
+
+/**
+ * The memory contract. Backends implement this; canonical tools
+ * (memory_search / memory_write / memory_delete) wrap it.
+ *
+ * Mandatory invariants enforced by conforming backends:
+ *  - write() rejects records without provenance.source_event_ids
+ *  - same id = update; new id = create
+ *  - get() updates last_accessed_at
+ *  - ids are stable
+ *
+ * The associated memory_write / memory_delete TIMELINE events are emitted
+ * by the canonical tool layer (not the store), so replaying those events
+ * reconstructs the store from the timeline.
+ */
+export interface MemoryStore {
+  search(args: MemorySearchArgs): Promise<MemorySearchHit[]>;
+  /** Returns null if not found. MUST update last_accessed_at on hit. */
+  get(id: string): Promise<MemoryRecord | null>;
+  /** Create or update. Same id = update, new/missing = create. */
+  write(input: MemoryWrite): Promise<MemoryRecord>;
+  /** Delete records matching the filter. Returns count deleted. */
+  forget(filter: MemoryFilter): Promise<number>;
+  /** Optional observability. */
+  stats?(): Promise<MemoryStats>;
+  /** Optional cleanup. */
+  close?(): void;
+}
+
+// ──── Processor ───────────────────────────────────────────────────────────
 
 export interface ProcessorContext {
   agentId: string;
@@ -144,6 +264,8 @@ export interface Processor {
   /** Free-form per-instance config the handler/template can read. */
   config?: Record<string, unknown>;
 }
+
+// ──── Channel ─────────────────────────────────────────────────────────────
 
 /**
  * What a Channel sees from the runtime: emit, subscribe, read-only timeline,

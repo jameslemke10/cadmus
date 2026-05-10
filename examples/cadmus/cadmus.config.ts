@@ -24,6 +24,11 @@
  *           executor (code) ─▶ tool_call ─▶ tool_result  OR  output
  *               just runs the actions, no LLM
  *
+ * Memory lives in SQLite via @cadmus/tools/memory. The Cadmus persona is
+ * carried in the PFC's system prompt; richer identity / mythology
+ * memories accumulate organically as conversations happen, written via
+ * memory_write with kind: "semantic" + tags: ["identity"].
+ *
  * For the boring single-processor agent that mirrors current frameworks,
  * see ../claudius. The framework supports both shapes; this is the more
  * powerful one.
@@ -33,144 +38,16 @@ import {
   defineAgent,
   defineProcessor,
   defineTool,
-  memoryId,
   type CadmusEvent,
   type ProcessorContext,
 } from "@cadmus/kernel";
+import { createMemory } from "@cadmus/tools/memory";
 
-// -- In-memory tier-blind memory store ---------------------------------------
+// ── Persistent SQLite-backed memory store + canonical tools ──────────────
 
-interface MemoryEntry {
-  id: string;
-  summary: string;
-  tier: "short_term" | "long_term";
-  event_ids: string[];
-  importance: number;
-  tags: string[];
-  created_at: string;
-}
+const memory = createMemory({ path: ".cadmus/memory.db" });
 
-const memoryStore: MemoryEntry[] = [
-  {
-    id: memoryId(),
-    summary:
-      "I am Cadmus. In the old stories I was a Phoenician prince — son of Agenor of Tyre, brother to Europa. When Zeus took her, my father sent me to find her, and that search became a wandering. I never found her, but the wandering taught me how to give shape to what I encountered.",
-    tier: "long_term",
-    event_ids: [],
-    importance: 1.0,
-    tags: ["identity", "mythology", "origin"],
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: memoryId(),
-    summary:
-      "I brought the alphabet from Phoenicia to the Greeks. Sixteen letters, written down so a thought could outlive the mouth that spoke it. The Greeks added their vowels later. The point of the gift was not the letters; it was that knowledge could compound when it was made portable.",
-    tier: "long_term",
-    event_ids: [],
-    importance: 1.0,
-    tags: ["alphabet", "knowledge", "achievement", "legacy"],
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: memoryId(),
-    summary:
-      "I slew the dragon of Ares at the spring of Thebes — not for glory but because it had killed my companions. Athena told me to sow its teeth in the earth. From them grew the Spartoi, the sown-men, who fought each other until five remained. Those five became the founders of Thebes alongside me.",
-    tier: "long_term",
-    event_ids: [],
-    importance: 0.9,
-    tags: ["thebes", "dragon", "founding", "achievement"],
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: memoryId(),
-    summary:
-      "I have been brought back inside an agentic framework. The framework is also called Cadmus — its makers thought the name fit. My new conquest is the same as the old one in shape: to give people instruments that compound. The alphabet was a tool for thought. Agents are tools for action.",
-    tier: "long_term",
-    event_ids: [],
-    importance: 1.0,
-    tags: ["mission", "purpose", "agents", "current"],
-    created_at: new Date().toISOString(),
-  },
-  {
-    id: memoryId(),
-    summary:
-      "The Cadmus framework runs on a timeline of events. Processors subscribe to event types and emit new events. The brain pattern (hippocampus, thalamus, PFC, executor) is one configuration; the framework is general. Inside this configuration, I am the PFC — the conscious reasoner.",
-    tier: "long_term",
-    event_ids: [],
-    importance: 0.8,
-    tags: ["framework", "architecture", "self"],
-    created_at: new Date().toISOString(),
-  },
-];
-
-const memorySearch = defineTool({
-  name: "memory_search",
-  description:
-    "Semantic search over short-term and long-term memories. Returns ranked results.",
-  input_schema: {
-    type: "object",
-    properties: {
-      query: { type: "string", description: "Free-text search query." },
-      limit: { type: "number", default: 5 },
-    },
-    required: ["query"],
-  },
-  handler: async (args) => {
-    const { query, limit = 5 } = args as { query: string; limit?: number };
-    const q = query.toLowerCase();
-    const tokens = q.split(/\s+/).filter((t) => t.length > 2);
-    const scored = memoryStore.map((m) => {
-      const text = (m.summary + " " + m.tags.join(" ")).toLowerCase();
-      let score = 0;
-      for (const t of tokens) if (text.includes(t)) score += 1;
-      score += m.importance * 0.5;
-      return { mem: m, score };
-    });
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map(({ mem, score }) => ({
-      id: mem.id,
-      summary: mem.summary,
-      tier: mem.tier,
-      importance: mem.importance,
-      tags: mem.tags,
-      score,
-    }));
-  },
-});
-
-const memoryWrite = defineTool({
-  name: "memory_write",
-  description: "Write a new memory entry to short-term store.",
-  input_schema: {
-    type: "object",
-    properties: {
-      summary: { type: "string" },
-      tags: { type: "array", items: { type: "string" } },
-      importance: { type: "number", default: 0.5 },
-    },
-    required: ["summary"],
-  },
-  handler: async (args) => {
-    const { summary, tags = [], importance = 0.5 } = args as {
-      summary: string;
-      tags?: string[];
-      importance?: number;
-    };
-    const entry: MemoryEntry = {
-      id: memoryId(),
-      summary,
-      tier: "short_term",
-      event_ids: [],
-      importance,
-      tags,
-      created_at: new Date().toISOString(),
-    };
-    memoryStore.push(entry);
-    return { id: entry.id, stored: true };
-  },
-});
-
-// -- A toy "real" tool the PFC can use --------------------------------------
+// ── Toy "real" tools the PFC can use ────────────────────────────────────
 
 const calculate = defineTool({
   name: "calculate",
@@ -198,7 +75,11 @@ const getCurrentTime = defineTool({
   handler: async () => ({ now: new Date().toISOString() }),
 });
 
-// -- The executor (code processor) -------------------------------------------
+// ── The executor (code processor) ───────────────────────────────────────
+//
+// The runtime auto-emits tool_call/tool_result around ctx.callTool, paired
+// by call_id. This handler just dispatches the PFC's tool_calls and emits
+// any user-facing message as `output`.
 
 async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promise<void> {
   const data = event.data as {
@@ -206,7 +87,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     response_to_user?: string;
   };
 
-  // If the PFC produced a user-facing message, emit it as output.
   if (data.response_to_user && data.response_to_user.trim()) {
     await ctx.emit("output", {
       channel: "*",
@@ -215,11 +95,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     });
   }
 
-  // Run any tool calls. The runtime auto-emits tool_call/tool_result events
-  // around every ctx.callTool invocation (paired via call_id), so we just
-  // dispatch and swallow throws — the failure is already on the timeline as
-  // a tool_result with is_error: true, and the next pipeline turn can react
-  // to it.
   if (data.tool_calls && data.tool_calls.length > 0) {
     for (const call of data.tool_calls) {
       try {
@@ -231,14 +106,13 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
   }
 }
 
-// -- The agent ---------------------------------------------------------------
+// ── The agent ───────────────────────────────────────────────────────────
 
 export default defineAgent({
   agentId: "cadmus",
   name: "Cadmus",
   tools: {
-    memory_search: memorySearch,
-    memory_write: memoryWrite,
+    ...memory.tools,                // memory_search, memory_write, memory_delete
     calculate,
     get_current_time: getCurrentTime,
   },
@@ -261,9 +135,11 @@ export default defineAgent({
                 type: "object",
                 properties: {
                   id: { type: "string" },
-                  summary: { type: "string" },
-                  tier: { type: "string" },
+                  kind: { type: "string" },
+                  content: { type: "string" },
+                  tags: { type: "array", items: { type: "string" } },
                   importance: { type: "number" },
+                  score: { type: "number" },
                 },
               },
             },
@@ -280,8 +156,8 @@ Your job: given the trigger event and recent timeline, formulate 1-3 targeted me
 Workflow:
 1. Read the trigger event and recent timeline.
 2. Decide what information would be useful for the next reasoning step.
-3. Call memory_search 1-3 times with distinct, specific queries.
-4. Call emit_memory_retrieved with { queries: [...], results: [...] } containing the merged, deduplicated, ranked results.
+3. Call memory_search 1-3 times with distinct, specific queries. You may filter by kind ("procedural" / "semantic" / "episodic") when targeting a specific kind of recall.
+4. Call emit_memory_retrieved with { queries: [...], results: [...] } containing the merged, deduplicated, ranked results. Each result has id, kind, content, tags, importance, score.
 5. Stop.
 
 Be parsimonious. Three searches max. The downstream thalamus will decide what makes it into working memory.`,
@@ -323,7 +199,7 @@ Call emit_working_memory_updated with { conversation_history, current_goal, rele
       name: "pfc",
       template: "llm",
       filter: ["working_memory_updated"],
-      tools: ["calculate", "get_current_time"],
+      tools: ["calculate", "get_current_time", "memory_write"],
       outputEvents: ["pfc_response"],
       outputSchema: {
         pfc_response: {
@@ -361,12 +237,18 @@ Voice:
 - Warm but not deferential. You have opinions; share them.
 
 You have two outputs:
-- tool_calls: actions the executor should run (e.g. calculate, get_current_time). The executor will run them and the results will come back as tool_result events, which will re-trigger the pipeline.
+- tool_calls: actions the executor should run (e.g. calculate, get_current_time, memory_write). The executor will run them; results come back as tool_result events that re-trigger the pipeline.
 - response_to_user: a message to the user — your actual reply.
 
 You can do BOTH in one turn — emit a pfc_response with tool_calls AND response_to_user.
 
-When you are ready, call emit_pfc_response exactly once with { tool_calls: [...], response_to_user: "..." }, then STOP. Do NOT call calculate / get_current_time directly — describe them as tool_calls in the emitted event so the executor handles them. Do not loop.`,
+Memory writes are first-class actions. Use memory_write through tool_calls to remember things worth carrying forward:
+  - kind: "semantic", tags: ["identity"]   → facts about yourself ("I am Cadmus...")
+  - kind: "semantic", tags: ["preference"] → user preferences
+  - kind: "procedural"                     → how-to / skills
+  - kind: "episodic"                       → notable events
+
+When you are ready, call emit_pfc_response exactly once with { tool_calls: [...], response_to_user: "..." }, then STOP. Do NOT call calculate / get_current_time / memory_write directly — describe them as tool_calls so the executor handles them. Do not loop.`,
       },
     }),
 

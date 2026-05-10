@@ -10,6 +10,7 @@
  *     tools it has access to.
  *   - Channels: bridges between an external system (CLI, Studio, Slack,
  *     etc.) and the timeline. Emit `input`, route `output`.
+ *   - Memory: a derived index over the timeline. Pluggable backends.
  *
  * The "brain" preset (hippocampus -> thalamus -> PFC -> executor) is one
  * configuration on top of these primitives. The framework knows nothing
@@ -29,6 +30,15 @@ export type {
   ChannelContext,
   EmitOptions,
   LLMTemplateConfig,
+  MemoryFilter,
+  MemoryProvenance,
+  MemoryRecord,
+  MemoryScope,
+  MemorySearchArgs,
+  MemorySearchHit,
+  MemoryStats,
+  MemoryStore,
+  MemoryWrite,
   Processor,
   ProcessorContext,
   ProcessorTemplate,
