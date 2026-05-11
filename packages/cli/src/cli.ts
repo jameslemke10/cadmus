@@ -27,6 +27,18 @@ import {
   updateConfig,
 } from "./workspace.js";
 import { readSecret, selectFromList } from "./prompts.js";
+import {
+  KERNEL_LOG,
+  STUDIO_LOG,
+  clearPidFile,
+  elapsedSince,
+  ensureRuntimeDirs,
+  isAlive,
+  readPidFile,
+  tailFile,
+  writePidFile,
+} from "./daemon.js";
+import { openSync } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const templatesDir = resolve(here, "..", "templates");
@@ -38,6 +50,8 @@ const HELP = `cadmus — open-source agent framework
 
 Daily use
   cadmus start              Boot the active agent's kernel + Studio UI
+  cadmus start --daemon     Boot in the background, logs to ~/.cadmus/logs/
+  cadmus status             Show daemon status, pid, uptime, log paths
   cadmus stop               Kill any running cadmus processes
   cadmus list               Show installed agents (★ marks the active one)
   cadmus use <name>         Switch the active agent
@@ -165,23 +179,83 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
+  const daemon = args.includes("--daemon") || args.includes("-d");
   const config = readConfig();
   const port = Number(process.env.CADMUS_PORT ?? config.port ?? 4000);
   const studioPort = Number(process.env.CADMUS_STUDIO_PORT ?? config.studioPort ?? 3001);
   const tsxBin = resolveTsxBin();
   const runnerScript = resolve(here, "runner.js");
   const studioDir = findStudioDir();
+  const env = applyApiKeysToEnv(process.env);
+
+  // If a daemon is already running, refuse rather than orphan a second one.
+  if (daemon) {
+    const existing = readPidFile();
+    if (existing && isAlive(existing.pid)) {
+      console.log("");
+      console.log(yellow(`  cadmus daemon already running (pid ${existing.pid}, agent ${existing.agent}).`));
+      console.log(`  Use ${bold("cadmus stop")} first, or ${bold("cadmus status")} to inspect.`);
+      console.log("");
+      process.exit(1);
+    } else if (existing) {
+      // Stale pid file — clean up.
+      clearPidFile();
+    }
+  }
 
   console.log("");
-  console.log(`  ${bold("cadmus")}`);
+  console.log(`  ${bold("cadmus")}${daemon ? dim(" — background") : ""}`);
   console.log(`  ${dim("─".repeat(8))}`);
   console.log(`  agent  : ${green(active.name)}`);
   console.log(`  kernel : http://localhost:${port}`);
-  if (studioDir) console.log(`  studio : http://localhost:${studioPort}  ${dim("(starting…)")}`);
+  if (studioDir) console.log(`  studio : http://localhost:${studioPort}${daemon ? "" : dim("  (starting…)")}`);
   console.log("");
 
-  const env = applyApiKeysToEnv(process.env);
+  if (daemon) {
+    ensureRuntimeDirs();
+    const kernelLogFd = openSync(KERNEL_LOG, "a");
+    const studioLogFd = openSync(STUDIO_LOG, "a");
 
+    const kernel = spawn(
+      tsxBin,
+      [runnerScript, active.configPath, String(port), "dev"],
+      {
+        stdio: ["ignore", kernelLogFd, kernelLogFd],
+        env,
+        detached: true,
+      },
+    );
+    kernel.unref();
+
+    if (studioDir) {
+      const studio = spawn("npx", ["next", "dev", "-p", String(studioPort)], {
+        cwd: studioDir,
+        stdio: ["ignore", studioLogFd, studioLogFd],
+        env: { ...env, NEXT_TELEMETRY_DISABLED: "1" },
+        detached: true,
+      });
+      studio.unref();
+    }
+
+    writePidFile({
+      pid: kernel.pid ?? -1,
+      startedAt: new Date().toISOString(),
+      agent: active.name,
+      kernelPort: port,
+      studioPort,
+    });
+
+    console.log(green("✓ ") + `running in background (pid ${kernel.pid}).`);
+    console.log(`  logs   : ${KERNEL_LOG}`);
+    console.log(`           ${STUDIO_LOG}`);
+    console.log(`  status : ${bold("cadmus status")}`);
+    console.log(`  stop   : ${bold("cadmus stop")}`);
+    console.log("");
+    // Don't open a browser when daemonized — too surprising.
+    process.exit(0);
+  }
+
+  // Foreground (default).
   const kernel = spawn(
     tsxBin,
     [runnerScript, active.configPath, String(port), "dev"],
@@ -217,20 +291,68 @@ async function cmdStart(): Promise<void> {
   });
 }
 
+async function cmdStatus(): Promise<void> {
+  const record = readPidFile();
+  console.log("");
+  console.log(`  ${bold("cadmus status")}`);
+  console.log(`  ${dim("─".repeat(13))}`);
+
+  if (!record) {
+    console.log(`  ${dim("no daemon registered.")}`);
+    console.log(`  start one with ${bold("cadmus start --daemon")}, or ${bold("cadmus start")} for foreground.`);
+    console.log("");
+    return;
+  }
+
+  const alive = isAlive(record.pid);
+  if (!alive) {
+    console.log(`  ${yellow("✗")} pid ${record.pid} is not running (stale pid file).`);
+    console.log(`  clearing.`);
+    clearPidFile();
+    console.log("");
+    return;
+  }
+
+  console.log(`  ${green("●")} running`);
+  console.log(`  agent    : ${green(record.agent)}`);
+  console.log(`  pid      : ${record.pid}`);
+  console.log(`  uptime   : ${elapsedSince(record.startedAt)}`);
+  console.log(`  kernel   : http://localhost:${record.kernelPort}`);
+  console.log(`  studio   : http://localhost:${record.studioPort}`);
+  console.log(`  logs     : ${KERNEL_LOG}`);
+  console.log(`             ${STUDIO_LOG}`);
+  console.log("");
+
+  if (args.includes("--logs") || args.includes("--tail")) {
+    console.log(`  ${dim("--- last 20 lines of kernel.log ---")}`);
+    console.log(tailFile(KERNEL_LOG, 20));
+    console.log("");
+  }
+}
+
 async function cmdStop(): Promise<void> {
-  // Kill running kernel runner + Studio dev server.
-  const patterns = ["cadmus-cli runner", "tsx.*runner.js", "next dev -p"];
-  let killed = 0;
-  for (const pattern of patterns) {
+  // 1. If a daemon is registered, kill its pid directly.
+  const record = readPidFile();
+  if (record && isAlive(record.pid)) {
     try {
-      const result = spawn("pkill", ["-f", pattern], { stdio: "ignore" });
-      result.on("exit", () => undefined);
-      killed += 1;
+      process.kill(record.pid, "SIGTERM");
     } catch {
       // ignore
     }
   }
-  // Also kill on the standard ports.
+  clearPidFile();
+
+  // 2. Sweep for any foreground runners + Studio dev servers.
+  const patterns = ["cadmus-cli runner", "tsx.*runner.js", "next dev -p"];
+  for (const pattern of patterns) {
+    try {
+      const result = spawn("pkill", ["-f", pattern], { stdio: "ignore" });
+      result.on("exit", () => undefined);
+    } catch {
+      // ignore
+    }
+  }
+  // 3. Anything still on the standard ports.
   try {
     spawn("sh", ["-c", `lsof -ti :4000 | xargs kill 2>/dev/null; lsof -ti :3001 | xargs kill 2>/dev/null`], {
       stdio: "ignore",
@@ -625,6 +747,8 @@ async function cmdDev(): Promise<void> {
       return cmdStart();
     case "stop":
       return cmdStop();
+    case "status":
+      return cmdStatus();
     case "list":
     case "ls":
       return cmdList();
