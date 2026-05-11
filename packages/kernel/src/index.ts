@@ -22,6 +22,10 @@ export { Runtime } from "./runtime.js";
 export { eventId, memoryId } from "./id.js";
 export { createCliChannel } from "./channels/cli.js";
 export type { CliChannelOptions } from "./channels/cli.js";
+export { createSchedulerChannel } from "./channels/scheduler.js";
+export type { SchedulerChannelOptions } from "./channels/scheduler.js";
+export { createTelegramChannel } from "./channels/telegram.js";
+export type { TelegramChannelOptions } from "./channels/telegram.js";
 export { eventMatchesFilter, filterTypes } from "./types.js";
 export type {
   AgentConfig,
