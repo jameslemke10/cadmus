@@ -20,7 +20,18 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
         selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
       } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg" : ""}`}
     >
-      <Handle type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
+      {/* Handles on all four sides — React Flow's smoothstep router picks
+          whichever pair is geometrically shortest, so edges no longer
+          force themselves through the middle of other boxes. Each side
+          is both a target and a source via different IDs. */}
+      <Handle id="left-in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
+      <Handle id="left-out" type="source" position={Position.Left} style={{ background: "#a8a29e" }} />
+      <Handle id="top-in" type="target" position={Position.Top} style={{ background: "#a8a29e" }} />
+      <Handle id="top-out" type="source" position={Position.Top} style={{ background: "#a8a29e" }} />
+      <Handle id="bottom-in" type="target" position={Position.Bottom} style={{ background: "#a8a29e" }} />
+      <Handle id="bottom-out" type="source" position={Position.Bottom} style={{ background: "#a8a29e" }} />
+      <Handle id="right-in" type="target" position={Position.Right} style={{ background: "#a8a29e" }} />
+      <Handle id="right-out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
 
       <div className="px-3 pt-3 pb-2">
         <div className="flex items-center justify-between gap-2">
@@ -94,7 +105,6 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
         )}
       </div>
 
-      <Handle type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
     </div>
   );
 }

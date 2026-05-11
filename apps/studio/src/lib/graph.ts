@@ -125,44 +125,19 @@ export function buildGraph(
     }
   }
 
-  // Memory edges: read (memory → processor, green) and write (processor → memory, red).
+  // Memory edges. We render reads (memory → processor) and writes
+  // (processor → memory) using the same neutral styling as every other
+  // edge — direction is conveyed by the arrowhead and the route, not by
+  // color.
   for (const p of memoryUsers) {
     const tools = p.tools ?? [];
     const reads = tools.filter((t) => MEMORY_READ_TOOLS.has(t));
     const writes = tools.filter((t) => MEMORY_WRITE_TOOLS.has(t));
     if (reads.length > 0) {
-      edges.push({
-        id: `${MEMORY_NODE_ID}__read__${p.name}`,
-        source: MEMORY_NODE_ID,
-        sourceHandle: "read-out",
-        target: p.name,
-        label: "read",
-        type: "smoothstep",
-        animated: false,
-        style: { stroke: "#10b981", strokeWidth: 1.5, strokeDasharray: "4 3" },
-        labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#047857" },
-        labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
-        labelBgPadding: [3, 2] as [number, number],
-        labelBgBorderRadius: 4,
-        data: { eventType: "memory-read" },
-      });
+      edges.push(makeEdge(MEMORY_NODE_ID, p.name, "memory_read"));
     }
     if (writes.length > 0) {
-      edges.push({
-        id: `${p.name}__write__${MEMORY_NODE_ID}`,
-        source: p.name,
-        target: MEMORY_NODE_ID,
-        targetHandle: "write-in",
-        label: "write",
-        type: "smoothstep",
-        animated: false,
-        style: { stroke: "#ef4444", strokeWidth: 1.5, strokeDasharray: "4 3" },
-        labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#b91c1c" },
-        labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
-        labelBgPadding: [3, 2] as [number, number],
-        labelBgBorderRadius: 4,
-        data: { eventType: "memory-write" },
-      });
+      edges.push(makeEdge(p.name, MEMORY_NODE_ID, "memory_write"));
     }
   }
 

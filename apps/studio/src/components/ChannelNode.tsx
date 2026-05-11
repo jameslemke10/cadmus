@@ -20,9 +20,16 @@ export function ChannelNode({ data, selected }: NodeProps<Node<ChannelNodeData>>
         selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
       } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg border-emerald-400" : "border-sky-300"}`}
     >
-      {!isInbound && (
-        <Handle type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
-      )}
+      {/* Handles on all four sides so React Flow can route edges through
+          whichever side is geometrically closest. */}
+      <Handle id="left-in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
+      <Handle id="left-out" type="source" position={Position.Left} style={{ background: "#a8a29e" }} />
+      <Handle id="top-in" type="target" position={Position.Top} style={{ background: "#a8a29e" }} />
+      <Handle id="top-out" type="source" position={Position.Top} style={{ background: "#a8a29e" }} />
+      <Handle id="bottom-in" type="target" position={Position.Bottom} style={{ background: "#a8a29e" }} />
+      <Handle id="bottom-out" type="source" position={Position.Bottom} style={{ background: "#a8a29e" }} />
+      <Handle id="right-in" type="target" position={Position.Right} style={{ background: "#a8a29e" }} />
+      <Handle id="right-out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
 
       <div className="px-3 py-2.5">
         <div className="flex items-center gap-1.5 mb-0.5">
@@ -46,10 +53,6 @@ export function ChannelNode({ data, selected }: NodeProps<Node<ChannelNodeData>>
           </div>
         )}
       </div>
-
-      {isInbound && (
-        <Handle type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
-      )}
     </div>
   );
 }

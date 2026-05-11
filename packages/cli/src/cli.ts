@@ -417,7 +417,7 @@ async function cmdSetup(): Promise<void> {
     options: [
       { label: "Google Gemini", value: "google", hint: googleHint },
       { label: "Anthropic Claude", value: "anthropic", hint: anthropicHint },
-      { label: "Skip — set keys later (cadmus setup, env vars, or .env.local)", value: "skip" },
+      { label: "Skip", value: "skip" },
     ],
     defaultIndex: 0,
   });
@@ -457,16 +457,8 @@ async function cmdSetup(): Promise<void> {
   const channelChoice = await selectFromList({
     prompt: `  ${bold("Connect an external channel?")}`,
     options: [
-      {
-        label: "Skip — Studio only",
-        value: "skip",
-        hint: "talk to your agent in the browser",
-      },
-      {
-        label: "Telegram bot",
-        value: "telegram",
-        hint: telegramHint,
-      },
+      { label: "Skip", value: "skip" },
+      { label: "Telegram bot", value: "telegram", hint: telegramHint },
     ],
     defaultIndex: 0,
   });
@@ -496,18 +488,10 @@ async function cmdSetup(): Promise<void> {
     : "optional — improves web_search quality";
 
   const toolChoice = await selectFromList({
-    prompt: `  ${bold("Configure web tools?")}`,
+    prompt: `  ${bold("Web search provider?")}`,
     options: [
-      {
-        label: "Skip — DuckDuckGo is the default",
-        value: "skip",
-        hint: "no key needed for basic search",
-      },
-      {
-        label: "Add Brave Search API key",
-        value: "brave",
-        hint: braveHint,
-      },
+      { label: "Brave Search (recommended)", value: "brave", hint: braveHint },
+      { label: "Skip", value: "skip" },
     ],
     defaultIndex: 0,
   });
