@@ -22,6 +22,7 @@ export { Runtime } from "./runtime.js";
 export { eventId, memoryId } from "./id.js";
 export { createCliChannel } from "./channels/cli.js";
 export type { CliChannelOptions } from "./channels/cli.js";
+export { eventMatchesFilter, filterTypes } from "./types.js";
 export type {
   AgentConfig,
   AppendInput,
@@ -29,6 +30,7 @@ export type {
   Channel,
   ChannelContext,
   EmitOptions,
+  FilterEntry,
   LLMTemplateConfig,
   MemoryFilter,
   MemoryProvenance,

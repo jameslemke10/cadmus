@@ -57,8 +57,9 @@ async function main() {
   console.log(`\npipeline ${settled ? "settled" : "timed out"} — ${runtime.timeline.count()} events:\n`);
   const events = runtime.timeline.all();
   for (const e of events) {
-    const dataPreview = JSON.stringify(e.data).slice(0, 180);
-    console.log(`  [${String(e.seq).padStart(2)}] ${e.type.padEnd(28)} ${dataPreview}${dataPreview.length >= 180 ? "…" : ""}`);
+    const dataPreview = JSON.stringify(e.data).slice(0, 140);
+    const src = (e.source ?? "—").padEnd(28);
+    console.log(`  [${String(e.seq).padStart(2)}] ${e.type.padEnd(26)} src=${src} ${dataPreview}${dataPreview.length >= 140 ? "…" : ""}`);
   }
 
   const output = events.find((e) => e.type === "output");

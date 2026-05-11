@@ -1,16 +1,18 @@
 import { eventId } from "./id.js";
 import { runLLMTemplate } from "./templates/llm.js";
 import { Timeline } from "./timeline.js";
-import type {
-  AgentConfig,
-  CadmusEvent,
-  Channel,
-  ChannelContext,
-  EmitOptions,
-  Processor,
-  ProcessorContext,
-  RuntimeOptions,
-  Tool,
+import {
+  eventMatchesFilter,
+  filterTypes,
+  type AgentConfig,
+  type CadmusEvent,
+  type Channel,
+  type ChannelContext,
+  type EmitOptions,
+  type Processor,
+  type ProcessorContext,
+  type RuntimeOptions,
+  type Tool,
 } from "./types.js";
 
 const DEFAULT_TIMELINE_PATH = ".cadmus/timeline.db";
@@ -74,17 +76,24 @@ export class Runtime {
       seenChannels.add(ch.name);
     }
 
-    // Soft warn: a processor filters on an event nothing emits.
+    // Hard error: duplicate processor names.
+    const seenProcs = new Set<string>();
+    for (const p of this.processors) {
+      if (seenProcs.has(p.name)) {
+        throw new Error(`Duplicate processor name "${p.name}".`);
+      }
+      seenProcs.add(p.name);
+    }
+
+    // Soft warn: a processor filters on an event type nothing emits.
     const emitted = new Set<string>(FRAMEWORK_EMITTED);
     for (const p of this.processors) {
       for (const e of p.outputEvents ?? []) emitted.add(e);
     }
     for (const p of this.processors) {
-      for (const f of p.filter) {
-        if (!emitted.has(f)) {
-          this.log(
-            `[warn] processor "${p.name}" filters on "${f}" but nothing emits it`,
-          );
+      for (const t of filterTypes(p.filter)) {
+        if (!emitted.has(t)) {
+          this.log(`[warn] processor "${p.name}" filters on "${t}" but nothing emits it`);
         }
       }
     }
@@ -130,11 +139,12 @@ export class Runtime {
     }
   }
 
-  /** Inject an input event (the typical external trigger). */
+  /** Inject an input event (the typical external trigger). source defaults to `channel:<channel>`. */
   async inject(text: string, channel: string = "app", kind: string = "text"): Promise<CadmusEvent> {
     return this.appendEvent({
       type: "input",
       data: { channel, kind, text },
+      source: `channel:${channel}`,
       parent_event_id: null,
       tags: ["external"],
     });
@@ -146,6 +156,7 @@ export class Runtime {
     data: Record<string, unknown>;
     session_id?: string | null;
     parent_event_id?: string | null;
+    source?: string | null;
     tags?: string[];
   }): Promise<CadmusEvent> {
     const stored = await this.timeline.append({
@@ -154,6 +165,7 @@ export class Runtime {
       data: input.data,
       session_id: input.session_id ?? null,
       parent_event_id: input.parent_event_id ?? null,
+      source: input.source ?? null,
       tags: input.tags ?? [],
     });
     this.opts.onEvent?.(stored);
@@ -166,7 +178,7 @@ export class Runtime {
     try {
       while (this.queue.length > 0) {
         const event = this.queue.shift()!;
-        const matching = this.processors.filter((p) => p.filter.includes(event.type));
+        const matching = this.processors.filter((p) => eventMatchesFilter(event, p.filter));
         // Fan out: run matching processors in parallel.
         await Promise.all(matching.map((p) => this.runProcessor(p, event)));
       }
@@ -200,6 +212,7 @@ export class Runtime {
           stack: err instanceof Error ? err.stack : undefined,
           triggering_event_id: event.id,
         },
+        source: "kernel",
         session_id: event.session_id,
         parent_event_id: event.id,
         tags: ["error"],
@@ -208,6 +221,7 @@ export class Runtime {
   }
 
   private makeContext(proc: Processor, event: CadmusEvent): ProcessorContext {
+    const procSource = `processor:${proc.name}`;
     return {
       agentId: this.agentId,
       processorName: proc.name,
@@ -219,6 +233,7 @@ export class Runtime {
           data,
           session_id: opts.sessionId ?? event.session_id,
           parent_event_id: opts.parentEventId ?? event.id,
+          source: opts.source ?? procSource,
           tags: opts.tags ?? [proc.name],
         }),
       callTool: async (name, args) => {
@@ -226,11 +241,12 @@ export class Runtime {
         if (!tool) throw new Error(`Tool not found: ${name}`);
 
         // Auto-emit tool_call before invocation, tool_result after.
-        // Both pair via call_id (per events-v1 spec).
+        // Both pair via call_id, and both are attributed to the processor that called the tool.
         const callId = eventId();
         const callEvent = await this.appendEvent({
           type: "tool_call",
           data: { tool: name, args, call_id: callId },
+          source: procSource,
           session_id: event.session_id,
           parent_event_id: event.id,
           tags: [proc.name, "tool"],
@@ -240,12 +256,14 @@ export class Runtime {
           const result = await tool.handler(args, {
             agentId: this.agentId,
             triggerEvent: event,
+            // Emits from inside a tool handler attribute to the tool itself.
             emit: async (type, data, opts: EmitOptions = {}) =>
               this.appendEvent({
                 type,
                 data,
                 session_id: opts.sessionId ?? event.session_id,
                 parent_event_id: opts.parentEventId ?? callEvent.id,
+                source: opts.source ?? `tool:${name}`,
                 tags: opts.tags ?? [`tool:${name}`],
               }),
             log: (m, d) => this.log(m, d),
@@ -253,6 +271,7 @@ export class Runtime {
           await this.appendEvent({
             type: "tool_result",
             data: { tool: name, call_id: callId, result, is_error: false },
+            source: procSource,
             session_id: event.session_id,
             parent_event_id: callEvent.id,
             tags: [proc.name, "tool"],
@@ -267,6 +286,7 @@ export class Runtime {
               error_message: err instanceof Error ? err.message : String(err),
               is_error: true,
             },
+            source: procSource,
             session_id: event.session_id,
             parent_event_id: callEvent.id,
             tags: [proc.name, "tool"],
@@ -279,6 +299,7 @@ export class Runtime {
   }
 
   private makeChannelContext(channel: Channel): ChannelContext {
+    const chSource = `channel:${channel.name}`;
     return {
       agentId: this.agentId,
       timeline: this.timeline,
@@ -286,6 +307,7 @@ export class Runtime {
         this.appendEvent({
           type,
           data,
+          source: chSource,
           tags: [`channel:${channel.name}`],
         }),
       subscribe: (listener) => this.timeline.subscribe(listener),

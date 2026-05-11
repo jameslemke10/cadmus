@@ -12,6 +12,18 @@ export interface CadmusEvent {
   type: string;
   agent_id: string;
   session_id: string | null;
+  /**
+   * Attribution: who emitted this event. Set automatically by the runtime.
+   * Conventional values:
+   *   "processor:<name>"  — emitted by a processor via ctx.emit
+   *   "tool:<name>"       — emitted by a tool handler via ctx.emit
+   *   "channel:<name>"    — emitted by a channel via ctx.emit, or by
+   *                         runtime.inject(text, channel) for that channel
+   *   "kernel"            — emitted by the runtime itself (e.g., error)
+   *   null                — appended by external code (tests, runtime.appendEvent
+   *                         with no source provided)
+   */
+  source: string | null;
   data: Record<string, unknown>;
   parent_event_id: string | null;
   tags: string[];
@@ -21,6 +33,8 @@ export type EmitOptions = {
   parentEventId?: string | null;
   sessionId?: string | null;
   tags?: string[];
+  /** Override the auto-attributed source. Rare — usually omit and let the runtime fill it. */
+  source?: string;
 };
 
 export interface Tool {
@@ -36,7 +50,8 @@ export interface ToolContext {
    *  default things like memory provenance, session_id, parent_event_id. */
   triggerEvent: CadmusEvent;
   /** Emit a new event onto the timeline. By default, parent_event_id is the
-   *  surrounding tool_call and session_id inherits from the trigger. */
+   *  surrounding tool_call, session_id inherits from the trigger, and
+   *  source is `tool:<this tool's name>`. */
   emit: (type: string, data: Record<string, unknown>, opts?: EmitOptions) => Promise<CadmusEvent>;
   log: (msg: string, data?: unknown) => void;
 }
@@ -45,6 +60,7 @@ export interface TimelineFilter {
   types?: string[];
   agentId?: string;
   sessionId?: string;
+  source?: string;
 }
 
 /** Input to TimelineStore.append. id, seq, and timestamp are assigned by the store. */
@@ -54,6 +70,7 @@ export interface AppendInput {
   data: Record<string, unknown>;
   session_id?: string | null;
   parent_event_id?: string | null;
+  source?: string | null;
   tags?: string[];
 }
 
@@ -200,6 +217,17 @@ export interface MemoryStore {
 
 // ──── Processor ───────────────────────────────────────────────────────────
 
+/**
+ * A filter entry. Either a bare event type (match by type only) or a
+ * structured form that also constrains by source attribution.
+ *
+ * Examples:
+ *   filter: ["input"]
+ *   filter: [{ type: "memory_retrieved", source: "processor:hippocampus" }]
+ *   filter: ["input", { type: "pfc_loop", source: "processor:executor" }]
+ */
+export type FilterEntry = string | { type: string; source?: string };
+
 export interface ProcessorContext {
   agentId: string;
   processorName: string;
@@ -247,8 +275,12 @@ export interface Processor {
   name: string;
   /** "llm" or "code". */
   template: ProcessorTemplate;
-  /** Event types that trigger this processor. */
-  filter: string[];
+  /**
+   * Event types that trigger this processor. Use a plain string to match
+   * by event type, or an object {type, source} to also constrain by
+   * attribution. See FilterEntry.
+   */
+  filter: FilterEntry[];
   /** Tool names this processor has access to (resolved from agent's tool registry). */
   tools?: string[];
   /** Event types this processor emits. The framework synthesizes emit_<type> tools for LLM processors. */
@@ -265,6 +297,25 @@ export interface Processor {
   config?: Record<string, unknown>;
 }
 
+/** Returns true if the event matches at least one entry in the filter list. */
+export function eventMatchesFilter(event: CadmusEvent, filter: FilterEntry[]): boolean {
+  for (const f of filter) {
+    if (typeof f === "string") {
+      if (f === event.type) return true;
+    } else {
+      if (f.type !== event.type) continue;
+      if (f.source !== undefined && f.source !== event.source) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Extract the event types referenced by a filter (for wiring validation). */
+export function filterTypes(filter: FilterEntry[]): string[] {
+  return filter.map((f) => (typeof f === "string" ? f : f.type));
+}
+
 // ──── Channel ─────────────────────────────────────────────────────────────
 
 /**
@@ -275,7 +326,7 @@ export interface Processor {
 export interface ChannelContext {
   agentId: string;
   timeline: TimelineReader;
-  /** Emit an event onto the timeline. The runtime fills in agent_id / id / seq / timestamp. */
+  /** Emit an event onto the timeline. The runtime fills in agent_id / id / seq / timestamp / source. */
   emit: (type: string, data: Record<string, unknown>) => Promise<CadmusEvent>;
   /** Subscribe to all newly-appended events. Returns an unsubscribe function. */
   subscribe: (listener: (event: CadmusEvent) => void) => () => void;
@@ -291,7 +342,7 @@ export interface ChannelContext {
  * See spec/channel.md for the full contract.
  */
 export interface Channel {
-  /** Unique name. Used as the `channel` field on input/output events. */
+  /** Unique name. Used as the `channel` field on input/output events and as the source prefix. */
   name: string;
   /** Event types this channel emits onto the timeline. Typically ["input"]. */
   inboundEvents?: string[];

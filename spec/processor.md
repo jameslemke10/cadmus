@@ -16,8 +16,14 @@ interface Processor {
   /** Execution model. */
   template: "llm" | "code";
 
-  /** Event types that trigger this processor. */
-  filter: string[];
+  /**
+   * Events that trigger this processor. Each entry is either:
+   *   - a bare event-type string ("input")
+   *   - a {type, source?} object that also constrains by attribution
+   *     ({ type: "memory_retrieved", source: "processor:hippocampus" })
+   * The two forms can be mixed in the same filter list.
+   */
+  filter: FilterEntry[];   // FilterEntry = string | { type: string; source?: string }
 
   /** Tool names this processor has access to (resolved from the agent's tool registry). */
   tools?: string[];
@@ -45,6 +51,31 @@ interface Processor {
   config?: Record<string, unknown>;
 }
 ```
+
+## Filter syntax
+
+Filters match by event type and optionally by event source (attribution).
+
+```ts
+type FilterEntry = string | { type: string; source?: string };
+```
+
+Examples:
+
+```ts
+// Match every event of type "input" (any source).
+filter: ["input"]
+
+// Match memory_retrieved events ONLY when emitted by the hippocampus processor.
+// Lets you add a second hippocampus (hippocampus_pii, hippocampus_general)
+// without retriggering downstream stages on the wrong one.
+filter: [{ type: "memory_retrieved", source: "processor:hippocampus" }]
+
+// Mixed: trigger on any user input, plus pfc_loop events emitted by the executor.
+filter: ["input", { type: "pfc_loop", source: "processor:executor" }]
+```
+
+**Why prefer source-constrained filters for processor chains:** the runtime auto-emits `tool_call` and `tool_result` events around every `ctx.callTool` invocation. Filtering on `tool_result` alone causes a processor to retrigger on its OWN tool calls (e.g., a hippocampus that calls `memory_search` would loop). Either filter on a custom Tier 2 event (`pfc_loop`, `working_memory_updated`) or constrain by source.
 
 ## ProcessorContext
 

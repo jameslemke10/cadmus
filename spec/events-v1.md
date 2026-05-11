@@ -18,6 +18,7 @@ interface CadmusEvent {
   type: string;                    // event type
   agent_id: string;                // which agent owns this event
   session_id?: string;             // logical conversation/run scope
+  source: string | null;           // attribution — who emitted this event (auto-set by runtime)
   parent_event_id?: string;        // causal link to a prior event
   tags: string[];                  // searchable labels
   data: Record<string, unknown>;   // payload; shape depends on type
@@ -29,6 +30,24 @@ Notes:
 - `id` and `seq` are assigned by the kernel at append time. Callers must not set them.
 - `session_id` is optional but recommended; many memory and channel features key on it. The runtime can default it from the triggering event's session.
 - `parent_event_id` is the primary mechanism for causal traceability. Set it when emitting an event in response to another event.
+
+### Source attribution
+
+`source` answers "who emitted this event." The runtime sets it automatically; you almost never specify it directly.
+
+| Emitter | source value |
+| --- | --- |
+| Processor's `ctx.emit` | `processor:<name>` (e.g., `processor:hippocampus`) |
+| Tool handler's `ctx.emit` | `tool:<name>` (e.g., `tool:memory_write`) |
+| Runtime auto-emits around `ctx.callTool` (`tool_call`, `tool_result`) | `processor:<calling-proc>` |
+| Channel's `ctx.emit` | `channel:<name>` (e.g., `channel:cli`) |
+| `runtime.inject(text, channel)` | `channel:<channel>` |
+| Kernel's `processor_error` catcher | `kernel` |
+| External code (tests, raw `runtime.appendEvent` with no source) | `null` |
+
+Source is a string, not a structured object — convention-driven, not enforced. Implementations that don't follow the convention (e.g., a custom processor that emits with `source: "weirdo"`) still work; downstream consumers that filter on source just won't match.
+
+The primary use of source is in **filter constraints** — see [processor.md](processor.md) for the `{ type, source }` filter form. It lets you say "I want `memory_retrieved` events but only from the hippocampus processor" so adding a second hippocampus later doesn't break downstream wiring.
 
 ## Session semantics — minimal in v1
 
