@@ -33,10 +33,12 @@ export const TOOLS_DIR = join(CLI_DIR, "packages", "tools");
 
 export interface CadmusConfig {
   activeAgent?: string;
+  /** Secrets applied to the runner's env. LLM keys + channel tokens live here. */
   apiKeys?: {
     GOOGLE_API_KEY?: string;
     ANTHROPIC_API_KEY?: string;
     OPENAI_API_KEY?: string;
+    TELEGRAM_BOT_TOKEN?: string;
   };
   port?: number;
   studioPort?: number;

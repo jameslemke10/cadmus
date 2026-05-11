@@ -237,11 +237,22 @@ function BrainCanvasInner({ agent, latestEvent, onProcessorClick }: Props) {
           showInteractive={false}
           style={{ button: { background: "#fafaf9", border: "1px solid #e7e5e4" } } as never}
         >
-          <ControlButton onClick={onResetLayout} title="Reset to auto-layout">
-            {/* Refresh icon */}
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 12a9 9 0 1 1-3-6.7" />
-              <polyline points="21 3 21 9 15 9" />
+          <ControlButton onClick={onResetLayout} title="Auto-layout (reset node positions)">
+            {/* layout grid icon — clearer than a refresh arrow */}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="3" width="7" height="9" rx="1" />
+              <rect x="14" y="3" width="7" height="5" rx="1" />
+              <rect x="14" y="12" width="7" height="9" rx="1" />
+              <rect x="3" y="16" width="7" height="5" rx="1" />
             </svg>
           </ControlButton>
         </Controls>

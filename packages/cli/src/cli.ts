@@ -443,9 +443,51 @@ async function cmdSetup(): Promise<void> {
     console.log("    or run cadmus setup again.");
   }
 
+  // ── Channel step ────────────────────────────────────────────────
+  // Studio always works out of the box (the runner auto-adds a studio
+  // channel in dev mode), so this step is purely for external channels
+  // like Telegram. Defaults to "Skip" because the most common path is
+  // "just try Studio first."
+
+  console.log("");
+  const telegramHint = apiKeys.TELEGRAM_BOT_TOKEN
+    ? `current: ${maskKey(apiKeys.TELEGRAM_BOT_TOKEN)}`
+    : "t.me/botfather to get a token";
+
+  const channelChoice = await selectFromList({
+    prompt: `  ${bold("Connect an external channel?")}`,
+    options: [
+      {
+        label: "Skip — Studio only",
+        value: "skip",
+        hint: "talk to your agent in the browser",
+      },
+      {
+        label: "Telegram bot",
+        value: "telegram",
+        hint: telegramHint,
+      },
+    ],
+    defaultIndex: 0,
+  });
+
+  if (channelChoice === "telegram") {
+    console.log("");
+    console.log(`  Get a bot token from ${blue("https://t.me/botfather")}`);
+    console.log(`  (send /newbot, name it, copy the token it gives you)`);
+    const token = (await readSecret("  Paste TELEGRAM_BOT_TOKEN (hidden): ")).trim();
+    if (token) {
+      apiKeys.TELEGRAM_BOT_TOKEN = token;
+      console.log(`  ${dim(`Saved. Switch to the telly agent with: ${bold("cadmus use telly")}`)}`);
+    }
+  }
+
   updateConfig({ apiKeys });
   console.log("");
   console.log(green("✓ ") + `saved to ${CONFIG_PATH}`);
+  console.log("");
+  console.log(`  ${dim("Studio (the live brain canvas + chat panel) will open at")}`);
+  console.log(`  ${dim("http://localhost:3001 when you start cadmus.")}`);
 
   const start = await selectFromList({
     prompt: `  ${bold("Start cadmus now?")}`,
