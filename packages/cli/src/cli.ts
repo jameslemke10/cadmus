@@ -44,6 +44,7 @@ Daily use
 
 Setup
   cadmus setup              Interactive: pick provider, paste API key
+  cadmus update             Pull latest framework from main and rebuild
   cadmus config             Edit settings (alias for setup)
 
 Agents
@@ -580,6 +581,27 @@ async function cmdInspect(): Promise<void> {
   t.close();
 }
 
+async function cmdUpdate(): Promise<void> {
+  const installScript = resolve(CLI_DIR, "install.sh");
+  if (!existsSync(installScript)) {
+    die(
+      `install.sh not found at ${installScript}.\n  Did you install via the curl one-liner?`,
+    );
+  }
+  console.log("");
+  console.log(`  ${bold("cadmus update")}`);
+  console.log(`  ${dim("─".repeat(13))}`);
+  console.log(`  Pulling latest from main; rebuilding kernel, tools, and CLI.`);
+  console.log(`  Your installed agents and API keys stay put.`);
+  console.log("");
+
+  const child = spawn("bash", [installScript], {
+    stdio: "inherit",
+    env: { ...process.env, CADMUS_HOME },
+  });
+  child.on("exit", (code) => process.exit(code ?? 0));
+}
+
 async function cmdDev(): Promise<void> {
   // Old-style: explicit config file path. Mostly for headless / CI.
   const configPath = args[1] ? resolve(process.cwd(), args[1]) : null;
@@ -612,6 +634,8 @@ async function cmdDev(): Promise<void> {
     case "setup":
     case "config":
       return cmdSetup();
+    case "update":
+      return cmdUpdate();
     case "add":
     case "init":
       return cmdAdd();

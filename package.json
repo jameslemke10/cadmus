@@ -15,7 +15,8 @@
     "cli:build": "npm run build --workspace=@cadmus/cli",
     "studio:dev": "npm run dev --workspace=@cadmus/studio",
     "build": "npm run kernel:build && npm run tools:build && npm run cli:build",
-    "start": "node packages/cli/dist/cli.js start"
+    "start": "node packages/cli/dist/cli.js start",
+    "test": "npm run build && npm test --workspaces --if-present"
   },
   "devDependencies": {
     "typescript": "^5"
