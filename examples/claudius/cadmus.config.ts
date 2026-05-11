@@ -3,20 +3,21 @@
  * as we can get on top of Cadmus.
  *
  * Architecture:
- *   - One PFC processor that loops input → tools → output.
- *   - Two boundary events the framework honors via `sessionEvents`:
- *       session_start          — clear the model's view of prior turns.
- *                                (analogous to /clear in Claude Code)
- *       conversation_compacted — collapse earlier context into a summary.
- *                                (analogous to Claude's automatic compaction)
+ *   - One PFC processor that loops input → tools → output via the timeline.
+ *     Each invocation is a single LLM turn: call a tool (which auto-emits
+ *     tool_call + tool_result events; tool_result re-triggers the processor),
+ *     or emit `output` to end the loop.
+ *   - To start a new conversation (forget prior turns), emit an event_boundary
+ *     event. The framework scopes every LLM context window to events at-or-
+ *     after the most recent boundary, so the model "forgets" anything older.
  *   - Persistent memory in .cadmus/memory.db (SQLite) — survives kernel
- *     restarts and session boundaries. The canonical memory_search /
+ *     restarts and conversation boundaries. The canonical memory_search /
  *     memory_write / memory_delete tools come from @cadmus/tools/memory.
  *
- * Inject either boundary event from Studio's chat input or via curl:
+ * Click the "New conversation" button in Studio to emit a boundary, or curl:
  *   curl -X POST http://localhost:4000/api/inject \
  *     -H 'content-type: application/json' \
- *     -d '{"type":"session_start","data":{"reason":"new topic"}}'
+ *     -d '{"type":"event_boundary","data":{"type":"conversation"}}'
  */
 
 import { defineAgent, defineProcessor, defineTool } from "@cadmus/kernel";
@@ -62,7 +63,7 @@ export default defineAgent({
     defineProcessor({
       name: "pfc",
       template: "llm",
-      filter: ["input", "tool_result", "session_start", "conversation_compacted"],
+      filter: ["input", "tool_result"],
       tools: ["memory_search", "memory_write", "memory_delete", "get_current_time", "calculate"],
       outputEvents: ["output"],
       outputSchema: {
@@ -79,22 +80,20 @@ export default defineAgent({
       templateConfig: {
         model: "gemini-2.5-flash",
         contextEvents: 80,
-        maxIterations: 6,
-        sessionEvents: ["session_start", "conversation_compacted"],
         systemPrompt: `You are Claudius — a friendly, capable assistant. You are running inside the Cadmus framework.
 
-How you operate:
-- Each turn, you see the recent timeline since the last session boundary (a session_start or conversation_compacted event). You don't see anything older. Don't reference earlier conversations directly unless you can find them via memory_search.
-- You have a persistent memory that DOES survive across sessions. Three kinds:
-  - "procedural" — skills and how-to ("when user asks X, do Y")
-  - "semantic"   — facts about the user / world (use tags: ["identity"] for facts about yourself)
-  - "episodic"   — events ("on date X, user said Y")
-- Search memory (memory_search) when context might exist; write (memory_write) when the user tells you something worth remembering; delete (memory_delete) when something is no longer true.
-- When you have something to say to the user, call emit_output with { channel: "*", kind: "text", text }, then stop. Channel "*" broadcasts to whichever channel sent the input.
+How a turn works:
+- Each invocation is a SINGLE LLM turn. You see the timeline since the most recent event_boundary (older events are hidden from you; persistent memory still survives across boundaries).
+- You may call real tools in this turn — memory_search, memory_write, memory_delete, get_current_time, calculate. You will NOT see the result of a tool within the same turn; the runtime emits a tool_result event onto the timeline, which re-triggers you. On the next invocation you'll see the result in the timeline dump.
+- End every turn by either calling exactly one tool (loop continues) OR calling emit_output with { channel: "*", kind: "text", text } to reply to the user (loop ends). Channel "*" broadcasts to whichever channel sent the input.
 
-When session_start arrives, you're in a new conversation. A quick memory_search at the start of the first response is often the right move.
+Persistent memory (survives across boundaries):
+- "procedural" — skills and how-to ("when user asks X, do Y")
+- "semantic"   — facts about the user / world (use tags: ["identity"] for facts about yourself)
+- "episodic"   — events ("on date X, user said Y")
+Search memory when context might exist; write when the user tells you something worth remembering; delete when something is no longer true.
 
-When conversation_compacted arrives, the system has summarized the earlier conversation into the event's data. Treat that summary as authoritative context for what came before.
+If the timeline shows an event_boundary as the most recent boundary, you're in a new conversation. A quick memory_search on the first response is often the right move.
 
 Voice: plainspoken, first person, concise unless detail is asked for. No "as an AI". No disclaimers.`,
       },

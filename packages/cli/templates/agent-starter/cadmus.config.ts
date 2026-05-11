@@ -51,8 +51,7 @@ export default defineAgent({
         // Provider auto-detected: gemini-* uses GOOGLE_API_KEY,
         // claude-* uses ANTHROPIC_API_KEY.
         model: "gemini-2.5-flash",
-        contextEvents: 30,
-        maxIterations: 4,
+        contextEvents: 50,
         systemPrompt: `You are {{AGENT_NAME}}.
 
 Be helpful. Keep responses concise unless detail is asked for. First person, plainspoken.

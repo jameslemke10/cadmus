@@ -25,6 +25,10 @@ const FRAMEWORK_EMITTED = new Set<string>([
   "memory_write",
   "memory_delete",
   "error",
+  // Convention: channels emit this when the user (or another channel signal)
+  // marks a divider in the stream. The LLM template always scopes its context
+  // walk to events at-or-after the most recent boundary.
+  "event_boundary",
   // External/system events that aren't strictly framework-emitted but conventionally exist.
   "timer_fired",
   "notification_received",

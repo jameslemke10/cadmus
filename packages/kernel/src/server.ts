@@ -157,7 +157,6 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
             ? {
                 model: p.templateConfig?.model,
                 systemPrompt: p.templateConfig?.systemPrompt,
-                maxIterations: p.templateConfig?.maxIterations,
                 contextEvents: p.templateConfig?.contextEvents,
                 temperature: p.templateConfig?.temperature,
               }

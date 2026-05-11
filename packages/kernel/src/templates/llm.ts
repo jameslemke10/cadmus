@@ -1,7 +1,6 @@
 import { createSession } from "../providers/index.js";
 import type {
   ProviderToolDef,
-  ProviderToolResult,
 } from "../providers/index.js";
 import type {
   CadmusEvent,
@@ -11,6 +10,8 @@ import type {
 } from "../types.js";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_CONTEXT_EVENTS = 50;
+const BOUNDARY_EVENT_TYPE = "event_boundary";
 
 function asObjectSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {
   if (!schema) {
@@ -61,6 +62,21 @@ function buildContextMessage(
   return lines.join("\n");
 }
 
+/**
+ * Run one LLM template invocation.
+ *
+ * Each invocation is a SINGLE provider turn. The model can call real tools
+ * and emit tools in that turn; both kinds of calls become events on the
+ * timeline (tool_call/tool_result auto-emitted by the runtime for real tools;
+ * user-defined events emitted directly for emit tools). The model does not
+ * see its own tool results within this invocation — the next invocation,
+ * triggered by some downstream filter match, will see them in the JSON
+ * context dump.
+ *
+ * Loops are external. A processor that wants to "keep thinking" emits an
+ * event whose type its own filter matches; emitting a terminal event nothing
+ * loops on (e.g. `output`) exits the cycle.
+ */
 export async function runLLMTemplate(
   proc: Processor,
   event: CadmusEvent,
@@ -72,7 +88,7 @@ export async function runLLMTemplate(
     throw new Error(`Processor ${proc.name} (llm) is missing templateConfig.systemPrompt`);
   }
 
-  const recent = collectRecentEvents(ctx, cfg.contextEvents ?? 30, cfg.sessionEvents);
+  const recent = collectRecentEvents(ctx, cfg.contextEvents ?? DEFAULT_CONTEXT_EVENTS);
 
   // Build the tool list: real tools + synthetic emit_<type> tools.
   const tools: ProviderToolDef[] = [];
@@ -110,147 +126,84 @@ export async function runLLMTemplate(
     apiKey: cfg.apiKey,
   });
 
-  const maxIterations = cfg.maxIterations ?? 5;
-  let toolResults: ProviderToolResult[] | undefined;
-  let totalEmissions = 0;
+  const turn = await session.send();
 
-  for (let iter = 0; iter < maxIterations; iter++) {
-    const turn = await session.send(toolResults);
-
-    if (turn.toolCalls.length === 0) {
-      // Forgiving fallback: if the model returned plain text but didn't call
-      // any tool (some models — Gemini in particular — sometimes ignore the
-      // emit_<type> tool and just answer in text), and this processor has a
-      // text-shaped output event, emit the text as that event so the user
-      // sees a response in the UI.
-      if (totalEmissions === 0 && turn.text.trim()) {
-        const fallbackEvent = pickTextOutputEvent(proc);
-        if (fallbackEvent) {
-          await ctx.emit(fallbackEvent, {
-            channel: "*",
-            kind: "text",
-            text: turn.text.trim(),
-          });
-          ctx.log(`(${proc.name}) auto-emitted ${fallbackEvent} from text-only response`);
-          return;
-        }
-        ctx.log(`(${proc.name} note) ${turn.text.slice(0, 200)}`);
-      }
-      return;
-    }
-
-    toolResults = [];
-    // Dedupe emit_<type> within a single turn: if the model batches three
-    // calls to emit_working_memory_updated (Gemini sometimes does this),
-    // only the first one actually emits — the rest get acknowledged with
-    // a "skipped" tool result so the model can self-correct.
-    const emittedTypesThisTurn = new Set<string>();
-    let emittedThisTurn = 0;
-
-    for (const tc of turn.toolCalls) {
-      try {
-        if (tc.name.startsWith("emit_")) {
-          const eventType = tc.name.slice("emit_".length);
-
-          if (emittedTypesThisTurn.has(eventType)) {
-            ctx.log(`(${proc.name}) duplicate emit_${eventType} in same turn — skipping`);
-            toolResults.push({
-              id: tc.id,
-              name: tc.name,
-              content: `skipped: already emitted ${eventType} this turn`,
-              isError: true,
-            });
-            continue;
-          }
-          emittedTypesThisTurn.add(eventType);
-
-          const data =
-            tc.input && typeof tc.input === "object" && "data" in tc.input && Object.keys(tc.input).length === 1
-              ? (tc.input.data as Record<string, unknown>)
-              : tc.input;
-          const emitted = await ctx.emit(eventType, data ?? {});
-          totalEmissions++;
-          emittedThisTurn++;
-          toolResults.push({
-            id: tc.id,
-            name: tc.name,
-            content: `emitted ${emitted.id}`,
-          });
-        } else if (realToolNames.has(tc.name)) {
-          const result = await ctx.callTool(tc.name, tc.input);
-          toolResults.push({
-            id: tc.id,
-            name: tc.name,
-            content:
-              typeof result === "string"
-                ? result
-                : JSON.stringify(result ?? null).slice(0, 8000),
-          });
-        } else {
-          toolResults.push({
-            id: tc.id,
-            name: tc.name,
-            content: `unknown tool: ${tc.name}`,
-            isError: true,
-          });
-        }
-      } catch (err) {
-        toolResults.push({
-          id: tc.id,
-          name: tc.name,
-          content: err instanceof Error ? err.message : String(err),
-          isError: true,
+  if (turn.toolCalls.length === 0) {
+    // Forgiving fallback: if the model returned plain text but didn't call
+    // any tool (some models — Gemini in particular — sometimes ignore the
+    // emit_<type> tool and just answer in text), and this processor has a
+    // text-shaped output event, emit the text as that event so the user
+    // sees a response in the UI.
+    if (turn.text.trim()) {
+      const fallbackEvent = pickTextOutputEvent(proc);
+      if (fallbackEvent) {
+        await ctx.emit(fallbackEvent, {
+          channel: "*",
+          kind: "text",
+          text: turn.text.trim(),
         });
+        ctx.log(`(${proc.name}) auto-emitted ${fallbackEvent} from text-only response`);
+        return;
       }
+      ctx.log(`(${proc.name} note) ${turn.text.slice(0, 200)}`);
     }
-
-    // "Emit then stop" — terminate the iteration loop after any turn that
-    // produced an emit. Real tool calls (memory_search, web_fetch, etc.)
-    // continue iterating; only output emissions end the loop. This caps
-    // each processor invocation to a single emission of each output type
-    // and prevents Gemini from looping on emit_<type> indefinitely.
-    if (emittedThisTurn > 0) {
-      return;
-    }
+    return;
   }
 
-  ctx.log(`(${proc.name}) hit maxIterations (${maxIterations}) without emitting`);
+  // Dedupe emit_<type> within a single turn: if the model batches three
+  // calls to emit_working_memory_updated (Gemini sometimes does this),
+  // only the first one actually emits.
+  const emittedTypesThisTurn = new Set<string>();
+
+  for (const tc of turn.toolCalls) {
+    try {
+      if (tc.name.startsWith("emit_")) {
+        const eventType = tc.name.slice("emit_".length);
+
+        if (emittedTypesThisTurn.has(eventType)) {
+          ctx.log(`(${proc.name}) duplicate emit_${eventType} in same turn — skipping`);
+          continue;
+        }
+        emittedTypesThisTurn.add(eventType);
+
+        const data =
+          tc.input && typeof tc.input === "object" && "data" in tc.input && Object.keys(tc.input).length === 1
+            ? (tc.input.data as Record<string, unknown>)
+            : tc.input;
+        await ctx.emit(eventType, data ?? {});
+      } else if (realToolNames.has(tc.name)) {
+        // Runtime auto-emits tool_call + tool_result events on the timeline.
+        // The result is not fed back to this LLM turn; the next invocation
+        // sees it as events in the JSON context dump.
+        await ctx.callTool(tc.name, tc.input);
+      } else {
+        ctx.log(`(${proc.name}) ignoring unknown tool: ${tc.name}`);
+      }
+    } catch (err) {
+      ctx.log(`(${proc.name}) tool ${tc.name} threw: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 /**
- * Collect timeline events for context, optionally honoring session boundaries.
+ * Collect timeline events for context. Always scopes the window to events
+ * at-or-after the most recent `event_boundary`, capped at `count` events.
  *
- * If `sessionEvents` is provided, finds the most recent event whose type is in
- * that list and only returns events at or after it (capped at `count`). This
- * is how Claudius mirrors a Claude-style session: a `session_start` event
- * makes the model "forget" prior turns; a `conversation_compacted` event
- * collapses earlier context into a summary.
+ * Channels (or external code) emit `event_boundary` events to mark dividers
+ * in the stream — typically a new conversation. The boundary itself is
+ * included in the returned slice so the model can see why it just lost
+ * earlier context.
  */
-function collectRecentEvents(
-  ctx: ProcessorContext,
-  count: number,
-  sessionEvents?: string[],
-): CadmusEvent[] {
-  if (!sessionEvents || sessionEvents.length === 0) {
+function collectRecentEvents(ctx: ProcessorContext, count: number): CadmusEvent[] {
+  const boundary = ctx.timeline.latest(BOUNDARY_EVENT_TYPE);
+  if (!boundary) {
     return ctx.timeline.recent(count);
   }
-  let boundarySeq = -1;
-  for (const eventType of sessionEvents) {
-    const ev = ctx.timeline.latest(eventType);
-    if (ev && ev.seq > boundarySeq) boundarySeq = ev.seq;
-  }
-  if (boundarySeq < 0) {
-    return ctx.timeline.recent(count);
-  }
-  // Get events with seq >= boundarySeq. We use timeline.recent(count) and
-  // filter; that keeps the API surface small. `count` becomes the cap.
   const tail = ctx.timeline.recent(count);
-  const fromBoundary = tail.filter((e) => e.seq >= boundarySeq);
-  // If the boundary is older than the tail, walk backward via the full list.
-  if (fromBoundary.length > 0 && fromBoundary[0].seq === boundarySeq) {
-    return fromBoundary;
+  if (tail.length > 0 && tail[0].seq <= boundary.seq) {
+    return tail.filter((e) => e.seq >= boundary.seq);
   }
-  return ctx.timeline.all().filter((e) => e.seq >= boundarySeq).slice(-count);
+  return ctx.timeline.all().filter((e) => e.seq >= boundary.seq).slice(-count);
 }
 
 /**

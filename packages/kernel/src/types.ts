@@ -253,21 +253,14 @@ export interface LLMTemplateConfig {
   apiKey?: string;
   /** Max tokens per LLM call. Default 4096. */
   maxTokens?: number;
-  /** Max tool-use iterations within one trigger. Default 5. */
-  maxIterations?: number;
-  /** How many tail events to include as context. Default 30. */
+  /**
+   * How many tail events to include as context. Default 50. The template
+   * always stops the walk at the most recent `event_boundary` event, so a
+   * boundary scopes the visible window regardless of this number.
+   */
   contextEvents?: number;
   /** Temperature. Default 0.7. */
   temperature?: number;
-  /**
-   * Event types that act as session boundaries. When set, the template
-   * only includes events at or after the most recent occurrence of any
-   * of these types in the context window.
-   *
-   * Common usage:
-   *   sessionEvents: ["session_start", "conversation_compacted"]
-   */
-  sessionEvents?: string[];
 }
 
 export interface Processor {

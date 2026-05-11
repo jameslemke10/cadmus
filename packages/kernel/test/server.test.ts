@@ -130,12 +130,12 @@ test("POST /api/inject with arbitrary { type, data } emits that type", async () 
     const res = await fetch(`http://127.0.0.1:${port}/api/inject`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type: "session_start", data: { session_id: "s1" } }),
+      body: JSON.stringify({ type: "event_boundary", data: { type: "conversation" } }),
     });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { event: { type: string; data: { session_id: string } } };
-    assert.equal(body.event.type, "session_start");
-    assert.equal(body.event.data.session_id, "s1");
+    const body = (await res.json()) as { event: { type: string; data: { type: string } } };
+    assert.equal(body.event.type, "event_boundary");
+    assert.equal(body.event.data.type, "conversation");
   } finally {
     await close();
     await runtime.stop();

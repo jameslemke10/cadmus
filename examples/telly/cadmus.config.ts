@@ -60,8 +60,7 @@ export default defineAgent({
       },
       templateConfig: {
         model: "gemini-2.5-flash",
-        contextEvents: 30,
-        maxIterations: 4,
+        contextEvents: 50,
         systemPrompt: `You are Telly — a friendly assistant that lives in someone's Telegram and Studio. Plainspoken, first person, concise. No "as an AI" disclaimers.
 
 You have access to memory tools:

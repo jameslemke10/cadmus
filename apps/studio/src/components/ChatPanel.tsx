@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { injectMessage } from "../lib/api";
+import { injectEvent, injectMessage } from "../lib/api";
 import type { AgentMeta, CadmusEvent } from "../lib/types";
 
 interface Props {
@@ -82,6 +82,15 @@ export function ChatPanel({ api, agent, events, connected }: Props) {
     }
   };
 
+  const newConversation = async () => {
+    setError(null);
+    try {
+      await injectEvent(api, "event_boundary", { type: "conversation" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const agentName = agent?.name ?? "Agent";
   const initial = agentName.slice(0, 1).toUpperCase();
 
@@ -99,6 +108,14 @@ export function ChatPanel({ api, agent, events, connected }: Props) {
             </div>
           </div>
         </div>
+        <button
+          onClick={() => void newConversation()}
+          disabled={!connected}
+          title="Emit an event_boundary so the model forgets the prior turns"
+          className="text-xs text-stone-600 border border-stone-200 rounded-md px-2.5 py-1 hover:bg-stone-50 disabled:opacity-30 transition"
+        >
+          New conversation
+        </button>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">

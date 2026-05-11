@@ -25,7 +25,6 @@ export interface ProcessorMeta {
   templateConfig?: {
     model?: string;
     systemPrompt?: string;
-    maxIterations?: number;
     contextEvents?: number;
     temperature?: number;
   };

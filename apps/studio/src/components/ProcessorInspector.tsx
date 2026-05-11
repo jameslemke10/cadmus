@@ -99,12 +99,6 @@ export function ProcessorInspector({ processor, recentEvents, onClose }: Props) 
                     v={String(processor.templateConfig.temperature)}
                   />
                 )}
-                {processor.templateConfig.maxIterations !== undefined && (
-                  <KeyValue
-                    k="maxIterations"
-                    v={String(processor.templateConfig.maxIterations)}
-                  />
-                )}
                 {processor.templateConfig.contextEvents !== undefined && (
                   <KeyValue
                     k="contextEvents"
