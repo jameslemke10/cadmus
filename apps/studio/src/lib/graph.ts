@@ -9,22 +9,24 @@ export interface ProcessorNodeData extends Record<string, unknown> {
   pulse: number;
 }
 
-// Spacing is generous on purpose: edge labels need room and React Flow's
-// smoothstep router needs vertical space to curve cleanly without crossing
-// nodes.
 const COLUMN_WIDTH = 380;
-const ROW_HEIGHT = 200;
+const ROW_HEIGHT = 220;
 
 const MEMORY_NODE_ID = "memory:store";
 
-/**
- * Tools that read or write memory. Anything in either list draws an edge
- * to the memory node from the processor's card. (Tool names are stable;
- * adding a custom memory backend's tools later is a one-line change.)
- */
 const MEMORY_READ_TOOLS = new Set(["memory_search", "memory_get"]);
 const MEMORY_WRITE_TOOLS = new Set(["memory_write", "memory_delete"]);
 
+/**
+ * Build React Flow nodes + edges from the agent's processors + channels.
+ *
+ * Layout is strict left-to-right: inbound channels on the far left,
+ * processors in topological-ish columns, outbound channels on the far
+ * right, memory below the row connected by top/bottom handles.
+ *
+ * Nodes are not draggable, so positions are deterministic and edges
+ * route cleanly (left/right handles for flow, top/bottom for memory).
+ */
 export function buildGraph(
   processors: ProcessorMeta[],
   channels: ChannelMeta[] = [],
@@ -37,7 +39,6 @@ export function buildGraph(
 
   const nodes: Node<ProcessorNodeData | ChannelNodeData | MemoryNodeData>[] = [];
 
-  // Inbound channel sources go to the LEFT of the first processor column.
   const inboundChannels = channels.filter((c) => (c.inboundEvents ?? []).length > 0);
   for (const [rowIdx, ch] of inboundChannels.entries()) {
     nodes.push({
@@ -48,7 +49,6 @@ export function buildGraph(
     });
   }
 
-  // Processors fill the middle columns.
   const procXOffset = inboundChannels.length > 0 ? 80 + COLUMN_WIDTH : 80;
   for (const [layerIdx, layer] of layers.entries()) {
     for (const [rowIdx, p] of layer.entries()) {
@@ -61,7 +61,6 @@ export function buildGraph(
     }
   }
 
-  // Outbound channel sinks go to the RIGHT of the last processor column.
   const outboundChannels = channels.filter((c) => (c.outboundEvents ?? []).length > 0);
   const outX = procXOffset + procColumns * COLUMN_WIDTH;
   for (const [rowIdx, ch] of outboundChannels.entries()) {
@@ -73,15 +72,15 @@ export function buildGraph(
     });
   }
 
-  // Memory node — show it if any processor uses memory tools. Position below
-  // the processors in the middle of the canvas.
+  // Memory node — show it if any processor uses memory tools.
   const memoryUsers = processors.filter((p) =>
     (p.tools ?? []).some((t) => MEMORY_READ_TOOLS.has(t) || MEMORY_WRITE_TOOLS.has(t)),
   );
   if (memoryUsers.length > 0) {
     const maxRowsPerLayer = Math.max(...layers.map((l) => l.length), 1);
-    const memoryY = 60 + maxRowsPerLayer * ROW_HEIGHT + 40;
-    const memoryX = procXOffset + Math.floor(procColumns / 2) * COLUMN_WIDTH;
+    const memoryY = 60 + maxRowsPerLayer * ROW_HEIGHT + 60;
+    // Center memory horizontally below the processor row.
+    const memoryX = procXOffset + Math.floor(procColumns / 2) * COLUMN_WIDTH + 50;
     nodes.push({
       id: MEMORY_NODE_ID,
       type: "memory",
@@ -92,12 +91,12 @@ export function buildGraph(
 
   const edges: Edge[] = [];
 
-  // Processor → processor edges.
+  // Processor → processor edges — go right→left between columns.
   for (const emitter of processors) {
     for (const eventType of emitter.outputEvents ?? []) {
       for (const consumer of processors) {
         if (filterMatchesType(consumer.filter, eventType)) {
-          edges.push(makeEdge(emitter.name, consumer.name, eventType));
+          edges.push(makeFlowEdge(emitter.name, consumer.name, eventType));
         }
       }
     }
@@ -108,7 +107,7 @@ export function buildGraph(
     for (const eventType of ch.inboundEvents ?? []) {
       for (const consumer of processors) {
         if (filterMatchesType(consumer.filter, eventType)) {
-          edges.push(makeEdge(`channel-in:${ch.name}`, consumer.name, eventType));
+          edges.push(makeFlowEdge(`channel-in:${ch.name}`, consumer.name, eventType));
         }
       }
     }
@@ -119,36 +118,36 @@ export function buildGraph(
     for (const eventType of ch.outboundEvents ?? []) {
       for (const emitter of processors) {
         if ((emitter.outputEvents ?? []).includes(eventType)) {
-          edges.push(makeEdge(emitter.name, `channel-out:${ch.name}`, eventType));
+          edges.push(makeFlowEdge(emitter.name, `channel-out:${ch.name}`, eventType));
         }
       }
     }
   }
 
-  // Memory edges. We render reads (memory → processor) and writes
-  // (processor → memory) using the same neutral styling as every other
-  // edge — direction is conveyed by the arrowhead and the route, not by
-  // color.
+  // Memory edges. Both connect processor.bottom ↔ memory.top via explicit
+  // handles so they don't try to route through the side flow.
   for (const p of memoryUsers) {
     const tools = p.tools ?? [];
     const reads = tools.filter((t) => MEMORY_READ_TOOLS.has(t));
     const writes = tools.filter((t) => MEMORY_WRITE_TOOLS.has(t));
     if (reads.length > 0) {
-      edges.push(makeEdge(MEMORY_NODE_ID, p.name, "memory_read"));
+      edges.push(makeMemoryEdge(MEMORY_NODE_ID, "read-out", p.name, "mem-in", "memory_read"));
     }
     if (writes.length > 0) {
-      edges.push(makeEdge(p.name, MEMORY_NODE_ID, "memory_write"));
+      edges.push(makeMemoryEdge(p.name, "mem-out", MEMORY_NODE_ID, "write-in", "memory_write"));
     }
   }
 
   return { nodes, edges };
 }
 
-function makeEdge(source: string, target: string, eventType: string): Edge {
+function makeFlowEdge(source: string, target: string, eventType: string): Edge {
   return {
     id: `${source}__${eventType}__${target}`,
     source,
+    sourceHandle: "out",
     target,
+    targetHandle: "in",
     label: eventType,
     type: "smoothstep",
     animated: false,
@@ -160,6 +159,31 @@ function makeEdge(source: string, target: string, eventType: string): Edge {
     },
     labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
     labelBgPadding: [4, 2] as [number, number],
+    labelBgBorderRadius: 4,
+    style: { stroke: "#a8a29e", strokeWidth: 1.5 },
+  };
+}
+
+function makeMemoryEdge(
+  source: string,
+  sourceHandle: string,
+  target: string,
+  targetHandle: string,
+  label: string,
+): Edge {
+  return {
+    id: `${source}__${label}__${target}`,
+    source,
+    sourceHandle,
+    target,
+    targetHandle,
+    label,
+    type: "smoothstep",
+    animated: false,
+    data: { eventType: label },
+    labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#57534e" },
+    labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
+    labelBgPadding: [3, 2] as [number, number],
     labelBgBorderRadius: 4,
     style: { stroke: "#a8a29e", strokeWidth: 1.5 },
   };

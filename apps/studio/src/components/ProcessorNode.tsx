@@ -13,6 +13,9 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
   const { processor, pulse } = data;
   const colorClass = TEMPLATE_COLORS[processor.template] ?? "bg-stone-50 border-stone-200";
   const isFiring = Date.now() - pulse < 800;
+  const usesMemory = (processor.tools ?? []).some((t) =>
+    ["memory_search", "memory_get", "memory_write", "memory_delete"].includes(t),
+  );
 
   return (
     <div
@@ -20,18 +23,28 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
         selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
       } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg" : ""}`}
     >
-      {/* Handles on all four sides — React Flow's smoothstep router picks
-          whichever pair is geometrically shortest, so edges no longer
-          force themselves through the middle of other boxes. Each side
-          is both a target and a source via different IDs. */}
-      <Handle id="left-in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
-      <Handle id="left-out" type="source" position={Position.Left} style={{ background: "#a8a29e" }} />
-      <Handle id="top-in" type="target" position={Position.Top} style={{ background: "#a8a29e" }} />
-      <Handle id="top-out" type="source" position={Position.Top} style={{ background: "#a8a29e" }} />
-      <Handle id="bottom-in" type="target" position={Position.Bottom} style={{ background: "#a8a29e" }} />
-      <Handle id="bottom-out" type="source" position={Position.Bottom} style={{ background: "#a8a29e" }} />
-      <Handle id="right-in" type="target" position={Position.Right} style={{ background: "#a8a29e" }} />
-      <Handle id="right-out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
+      {/* Flow handles: events come in the left, go out the right. */}
+      <Handle id="in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
+      <Handle id="out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
+
+      {/* Memory handles (bottom): write goes out, read comes in. Only present
+          when the processor declares memory_* tools — keeps the visual clean. */}
+      {usesMemory && (
+        <>
+          <Handle
+            id="mem-out"
+            type="source"
+            position={Position.Bottom}
+            style={{ background: "#10b981", left: "38%" }}
+          />
+          <Handle
+            id="mem-in"
+            type="target"
+            position={Position.Bottom}
+            style={{ background: "#10b981", left: "62%" }}
+          />
+        </>
+      )}
 
       <div className="px-3 pt-3 pb-2">
         <div className="flex items-center justify-between gap-2">
@@ -104,7 +117,6 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
           </>
         )}
       </div>
-
     </div>
   );
 }

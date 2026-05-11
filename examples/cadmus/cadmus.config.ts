@@ -1,106 +1,36 @@
 /**
  * Cadmus — the brain agent.
  *
- * The flagship example. Named for the Phoenician prince of myth: the man
- * credited with bringing the alphabet to Greece, the dragon-slayer who
- * founded Thebes from the teeth he sowed. He has been given a new form
- * here — an agentic framework — and a new conquest: helping people build
- * agents that push the world forward.
+ * Four processors, strict left-to-right pipeline:
  *
- * Five processors chained on each other's custom events:
+ *   input ──► hippocampus ──► thalamus ──► pfc ──► output
+ *                  ↓                        ↓
+ *                  └────── memory ◇ ────────┘
  *
- *   input        ─┐                              ┌──► (executor emits pfc_loop)
- *                 ▼                              │
- *           hippocampus ── memory_retrieved ──► thalamus
- *                                                 │
- *                                                 ▼
- *                                          working_memory_updated
- *                                                 │
- *                                                 ▼
- *                                                pfc ── pfc_response ──► executor
- *                                                                          │
- *                                                  ┌───── output ◄─────────┤
- *                                                  └── pfc_loop ◄──────────┘
+ * - hippocampus retrieves relevant memories (memory_search)
+ * - thalamus compresses everything the pfc actually needs to see
+ * - pfc reasons, uses web + memory tools, writes back to memory,
+ *   and emits the final reply
  *
- * The PFC has web tools (search + fetch) so it can actually go look at
- * the world. Memory is SQLite-backed and persists across runs.
+ * The pfc uses tools directly via the LLM template's tool-use loop:
+ * the model calls web_search, reads the result in the next iteration,
+ * decides whether to search again or answer, then emits output.
  *
- * For the boring single-processor agent, see ../claudius.
+ * For an even simpler single-processor agent, see ../claudius.
  * For a Telegram-connected agent, see ../telly.
  */
 
-import {
-  defineAgent,
-  defineProcessor,
-  type CadmusEvent,
-  type ProcessorContext,
-} from "@cadmus/kernel";
+import { defineAgent, defineProcessor } from "@cadmus/kernel";
 import { createMemory } from "@cadmus/tools/memory";
 import { webSearch, webFetch } from "@cadmus/tools/web";
 
 const memory = createMemory({ path: ".cadmus/memory.db" });
 
-/**
- * Executor — dispatches the PFC's planned tool_calls, emits the user-facing
- * output if PFC produced one, and emits pfc_loop if PFC produced tool_calls
- * but no response_to_user.
- */
-async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promise<void> {
-  const data = event.data as {
-    tool_calls?: Array<{ tool: string; args: Record<string, unknown> }>;
-    response_to_user?: string;
-  };
-
-  const responseText = (data.response_to_user ?? "").trim();
-  const toolCalls = data.tool_calls ?? [];
-
-  if (responseText) {
-    await ctx.emit("output", {
-      channel: "*",
-      kind: "text",
-      text: responseText,
-    });
-  }
-
-  for (const call of toolCalls) {
-    try {
-      await ctx.callTool(call.tool, call.args);
-    } catch {
-      // Failure already recorded by the runtime's auto-emitted tool_result.
-    }
-  }
-
-  if (!responseText && toolCalls.length > 0) {
-    const depth = await countLoopDepth(ctx);
-    if (depth >= 3) {
-      ctx.log(`pfc_loop depth ${depth} reached; ending loop`);
-      await ctx.emit("output", {
-        channel: "*",
-        kind: "text",
-        text: "(I worked on that but didn't reach a clean answer — ask me again with more detail?)",
-      });
-      return;
-    }
-    await ctx.emit("pfc_loop", { depth: depth + 1 });
-  }
-}
-
-async function countLoopDepth(ctx: ProcessorContext): Promise<number> {
-  let depth = 0;
-  let cursor: CadmusEvent | null = ctx.triggerEvent;
-  while (cursor && depth < 10) {
-    if (cursor.type === "pfc_loop") depth++;
-    if (!cursor.parent_event_id) break;
-    cursor = ctx.timeline.byId(cursor.parent_event_id);
-  }
-  return depth;
-}
-
 export default defineAgent({
   agentId: "cadmus",
   name: "Cadmus",
   tools: {
-    ...memory.tools,    // memory_search, memory_write, memory_delete
+    ...memory.tools, // memory_search, memory_write, memory_delete
     web_search: webSearch,
     web_fetch: webFetch,
   },
@@ -109,7 +39,7 @@ export default defineAgent({
     defineProcessor({
       name: "hippocampus",
       template: "llm",
-      filter: ["input", "pfc_loop"],
+      filter: ["input"],
       tools: ["memory_search"],
       outputEvents: ["memory_retrieved"],
       outputSchema: {
@@ -150,7 +80,7 @@ Workflow:
       },
     }),
 
-    // Thalamus — assembles working memory.
+    // Thalamus — compresses retrieved memories + timeline into a working snapshot.
     defineProcessor({
       name: "thalamus",
       template: "llm",
@@ -172,44 +102,38 @@ Workflow:
         model: "gemini-2.5-flash",
         contextEvents: 20,
         systemPrompt: `You are the THALAMUS of a Cadmus agent.
-Your job: assemble working memory for the PFC. Given the timeline (recent events including memory_retrieved, input, tool_result, prior working memory), produce a single working_memory_updated event.
+Your job: assemble working memory for the PFC. Given the timeline (recent events including memory_retrieved, input, prior working memory), produce a single working_memory_updated event.
 
-Compress the conversation history. Identify the current goal. Surface the 2-5 most relevant memories. Note any recent tool results. Be concise — every token matters because this is what the PFC sees.
+Compress the conversation history. Identify the current goal. Surface the 2-5 most relevant memories. Be concise — every token matters because this is what the PFC sees.
 
 Call emit_working_memory_updated EXACTLY ONCE with { conversation_history, current_goal, relevant_memories, recent_results }. Then stop. Do not call any tools after emitting.`,
       },
     }),
 
-    // PFC — the conscious reasoner. Plans, reaches into the web, decides on the response.
+    // PFC — the conscious reasoner. Uses tools directly via the LLM
+    // template's tool-use loop (web_search, web_fetch, memory_write),
+    // then emits the user-facing output. No separate executor.
     defineProcessor({
       name: "pfc",
       template: "llm",
       filter: [{ type: "working_memory_updated", source: "processor:thalamus" }],
       tools: ["web_search", "web_fetch", "memory_write"],
-      outputEvents: ["pfc_response"],
+      outputEvents: ["output"],
       outputSchema: {
-        pfc_response: {
+        output: {
           type: "object",
           properties: {
-            tool_calls: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  tool: { type: "string" },
-                  args: { type: "object" },
-                },
-                required: ["tool", "args"],
-              },
-            },
-            response_to_user: { type: "string" },
+            channel: { type: "string", description: "Target channel, or '*' to broadcast." },
+            kind: { type: "string", description: "Payload variant. Use 'text' for plain text." },
+            text: { type: "string" },
           },
+          required: ["channel", "kind", "text"],
         },
       },
       templateConfig: {
         model: "gemini-2.5-flash",
         contextEvents: 8,
-        maxIterations: 2,
+        maxIterations: 4,
         systemPrompt: `You are Cadmus.
 
 In the old stories you were the Phoenician prince who brought the alphabet to Greece, slew the dragon of Ares, and founded Thebes from its sown teeth. You have been brought back inside an agentic framework — also named Cadmus — to take up a new conquest: helping people build agents that push the world forward. The alphabet made thought portable; agents make action portable. Both are gifts that compound.
@@ -222,29 +146,17 @@ Voice:
 - Short by default. Substantive when it matters.
 - Warm but not deferential. You have opinions; share them.
 
-Output structure:
-- tool_calls: actions the executor should run (web_search, web_fetch, memory_write).
-- response_to_user: a message to the user — your actual reply.
+Tools you can use directly:
+  - web_search: look something up
+  - web_fetch: pull a specific URL
+  - memory_write: persist something worth carrying forward
+      kind: "semantic", tags: ["identity"]   → facts about yourself
+      kind: "semantic", tags: ["preference"] → user preferences
+      kind: "procedural"                     → how-to / skills
+      kind: "episodic"                       → notable events
 
-Looping: if you set tool_calls but leave response_to_user empty, the executor will run the tools and re-trigger the pipeline so you can react to the results. Set response_to_user when you're ready to talk to the user; that ends the loop.
-
-Memory writes are first-class:
-  - kind: "semantic", tags: ["identity"]   → facts about yourself
-  - kind: "semantic", tags: ["preference"] → user preferences
-  - kind: "procedural"                     → how-to / skills
-  - kind: "episodic"                       → notable events
-
-Call emit_pfc_response EXACTLY ONCE with { tool_calls: [...], response_to_user: "..." }, then STOP. Do NOT call the executor's tools (web_search / web_fetch / memory_write) directly here — describe them as tool_calls in the emitted event so the executor handles them.`,
+Call tools as needed to answer the user. When you have your answer, call emit_output EXACTLY ONCE with { channel: "*", kind: "text", text } and stop.`,
       },
-    }),
-
-    // Executor — runs the PFC's planned tool_calls.
-    defineProcessor({
-      name: "executor",
-      template: "code",
-      filter: [{ type: "pfc_response", source: "processor:pfc" }],
-      outputEvents: ["output", "pfc_loop"],
-      handler: executorHandler,
     }),
   ],
   storage: {
