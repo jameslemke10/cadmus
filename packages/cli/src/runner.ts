@@ -5,7 +5,13 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Runtime, createCliChannel, startServer, type AgentConfig } from "@cadmus/kernel";
+import {
+  Runtime,
+  createCliChannel,
+  createStudioChannel,
+  startServer,
+  type AgentConfig,
+} from "@cadmus/kernel";
 import { listAgents, readConfig, updateConfig } from "./workspace.js";
 
 async function main() {
@@ -26,11 +32,23 @@ async function main() {
     process.exit(1);
   }
 
-  // In one-shot mode (no studio), wire stdin/stdout via the built-in CLI
-  // channel. The channel handles both reading input lines and routing
-  // output events back to stdout.
-  if (mode !== "dev") {
-    config.channels = [...(config.channels ?? []), createCliChannel()];
+  // Channel wiring depends on mode:
+  //  - dev    : auto-add a Studio channel for canvas visualization (the
+  //             real I/O happens via the kernel HTTP server's
+  //             /api/inject + SSE, which already tags events with
+  //             source "channel:studio").
+  //  - others : wire stdin/stdout via the built-in CLI channel.
+  // Both auto-adds are no-ops if the agent's config already declares
+  // a channel with the same name.
+  const existingChannelNames = new Set((config.channels ?? []).map((c) => c.name));
+  if (mode === "dev") {
+    if (!existingChannelNames.has("studio")) {
+      config.channels = [...(config.channels ?? []), createStudioChannel()];
+    }
+  } else {
+    if (!existingChannelNames.has("cli")) {
+      config.channels = [...(config.channels ?? []), createCliChannel()];
+    }
   }
 
   const runtime = new Runtime(config, { verbose: true });

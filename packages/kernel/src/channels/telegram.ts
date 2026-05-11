@@ -7,19 +7,19 @@
  *     createTelegramChannel({ token: process.env.TELEGRAM_BOT_TOKEN }),
  *   ],
  *
- * Inbound: each user message arrives as an `input` event with
- *   { channel: "telegram", kind: "text", text, chat_id, telegram_user, telegram_message_id }
+ * Inbound: each user message becomes an `input` event with
+ *   { channel: "telegram", kind: "text", text, chat_id, ... }
+ *   and a session_id of `telegram:<chat_id>`.
  *
- * Outbound: any `output` event with channel: "telegram" or "*" routes back
- * to the chat that started the conversation. We find the chat_id by walking
- * the event's parent_event_id chain back to the originating `input`.
+ * Outbound: any `output` event whose session_id starts with `telegram:`
+ * is routed back to that chat. We rely on session_id (not parent_event_id)
+ * because ctx.emit propagates session_id automatically to every
+ * descendant, regardless of whether intermediate processors override
+ * parent_event_id. Fallback to walking parent_event_id for events whose
+ * session wasn't set (e.g., manual injections).
  *
  * Token: pass {token} explicitly, or set TELEGRAM_BOT_TOKEN in env.
  * Get a token from BotFather: https://t.me/botfather
- *
- * NOTE: this currently lives in @cadmus/kernel for v0.1 to avoid a package
- * shuffle. It will move to @cadmus/channels/telegram once that package
- * exists (per spec/channel.md).
  */
 
 import type { CadmusEvent, Channel, ChannelContext, TimelineReader } from "../types.js";
@@ -60,6 +60,18 @@ interface SendMessageResponse {
   description?: string;
 }
 
+const SESSION_PREFIX = "telegram:";
+
+function sessionForChat(chatId: number): string {
+  return `${SESSION_PREFIX}${chatId}`;
+}
+
+function chatFromSession(sessionId: string | null): number | null {
+  if (!sessionId || !sessionId.startsWith(SESSION_PREFIX)) return null;
+  const n = Number.parseInt(sessionId.slice(SESSION_PREFIX.length), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function createTelegramChannel(options: TelegramChannelOptions = {}): Channel {
   const name = options.name ?? "telegram";
   const token = options.token ?? process.env.TELEGRAM_BOT_TOKEN;
@@ -80,11 +92,14 @@ export function createTelegramChannel(options: TelegramChannelOptions = {}): Cha
   let pollPromise: Promise<void> | null = null;
 
   /**
-   * Walk back along parent_event_id to find the originating telegram input
-   * event and return its chat_id. Returns null if no telegram input is in
-   * the parent chain.
+   * Fallback: walk parent_event_id back looking for a telegram input.
+   * Only used when session_id isn't a telegram session (shouldn't happen for
+   * events emitted via ctx.emit, but defends against detached emissions).
    */
-  function findChatId(eventId: string | null, timeline: TimelineReader): number | null {
+  function findChatIdViaChain(
+    eventId: string | null,
+    timeline: TimelineReader,
+  ): number | null {
     let cursor: string | null = eventId;
     let safety = 100;
     while (cursor && safety-- > 0) {
@@ -115,17 +130,20 @@ export function createTelegramChannel(options: TelegramChannelOptions = {}): Cha
       if (pollPromise) return; // idempotent
       stopped = false;
 
-      // Outbound: route output events back to the originating Telegram chat.
+      // Outbound: prefer session_id; fall back to parent chain walk.
       unsubscribe = ctx.subscribe(async (event) => {
         if (event.type !== "output") return;
         const d = event.data as { channel?: string; kind?: string; text?: string };
         if (d.channel !== name && d.channel !== "*") return;
         if (d.kind !== "text" || typeof d.text !== "string" || !d.text.trim()) return;
 
-        const chatId = findChatId(event.parent_event_id, ctx.timeline);
-        if (!chatId) {
+        let chatId = chatFromSession(event.session_id);
+        if (chatId === null) {
+          chatId = findChatIdViaChain(event.parent_event_id, ctx.timeline);
+        }
+        if (chatId === null) {
           ctx.log(
-            `output event ${event.id} has no telegram input in its parent chain — can't route`,
+            `output event ${event.id} has no telegram session or parent telegram input — can't route`,
           );
           return;
         }
@@ -145,7 +163,7 @@ export function createTelegramChannel(options: TelegramChannelOptions = {}): Cha
         }
       });
 
-      // Inbound: long-poll for updates.
+      // Inbound: long-poll for updates and emit input events stamped with a session.
       pollPromise = (async () => {
         ctx.log(`telegram: long-polling started`);
         while (!stopped) {
@@ -169,16 +187,20 @@ export function createTelegramChannel(options: TelegramChannelOptions = {}): Cha
               if (update.update_id > lastUpdateId) lastUpdateId = update.update_id;
               const msg = update.message ?? update.edited_message;
               if (!msg || !msg.text) continue;
-              await ctx.emit("input", {
-                channel: name,
-                kind: "text",
-                text: msg.text,
-                chat_id: msg.chat.id,
-                chat_type: msg.chat.type,
-                telegram_user:
-                  msg.from?.username ?? msg.from?.first_name ?? msg.chat.first_name,
-                telegram_message_id: msg.message_id,
-              });
+              await ctx.emit(
+                "input",
+                {
+                  channel: name,
+                  kind: "text",
+                  text: msg.text,
+                  chat_id: msg.chat.id,
+                  chat_type: msg.chat.type,
+                  telegram_user:
+                    msg.from?.username ?? msg.from?.first_name ?? msg.chat.first_name,
+                  telegram_message_id: msg.message_id,
+                },
+                { sessionId: sessionForChat(msg.chat.id) },
+              );
             }
           } catch (err) {
             if (stopped) break;
@@ -196,8 +218,6 @@ export function createTelegramChannel(options: TelegramChannelOptions = {}): Cha
         unsubscribe();
         unsubscribe = null;
       }
-      // Don't await pollPromise — fetch has up to longPoll seconds of latency.
-      // The flag will end the loop on next iteration. Caller can move on.
       pollPromise = null;
     },
   };

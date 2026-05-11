@@ -26,6 +26,8 @@ export { createSchedulerChannel } from "./channels/scheduler.js";
 export type { SchedulerChannelOptions } from "./channels/scheduler.js";
 export { createTelegramChannel } from "./channels/telegram.js";
 export type { TelegramChannelOptions } from "./channels/telegram.js";
+export { createStudioChannel } from "./channels/studio.js";
+export type { StudioChannelOptions } from "./channels/studio.js";
 export { eventMatchesFilter, filterTypes } from "./types.js";
 export type {
   AgentConfig,

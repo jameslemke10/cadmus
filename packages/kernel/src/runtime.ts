@@ -303,11 +303,12 @@ export class Runtime {
     return {
       agentId: this.agentId,
       timeline: this.timeline,
-      emit: async (type, data) =>
+      emit: async (type, data, opts = {}) =>
         this.appendEvent({
           type,
           data,
-          source: chSource,
+          source: opts.source ?? chSource,
+          session_id: opts.sessionId ?? null,
           tags: [`channel:${channel.name}`],
         }),
       subscribe: (listener) => this.timeline.subscribe(listener),

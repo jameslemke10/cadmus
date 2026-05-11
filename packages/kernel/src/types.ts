@@ -323,11 +323,22 @@ export function filterTypes(filter: FilterEntry[]): string[] {
  * and a logger. Channels do NOT have direct callTool access — they interact
  * with the agent purely through events.
  */
+export interface ChannelEmitOptions {
+  /** Stamp the emitted event with a session_id so descendants inherit it. Channels use this for stateless reply routing. */
+  sessionId?: string | null;
+  /** Override the auto-attributed source (usually leave undefined). */
+  source?: string;
+}
+
 export interface ChannelContext {
   agentId: string;
   timeline: TimelineReader;
   /** Emit an event onto the timeline. The runtime fills in agent_id / id / seq / timestamp / source. */
-  emit: (type: string, data: Record<string, unknown>) => Promise<CadmusEvent>;
+  emit: (
+    type: string,
+    data: Record<string, unknown>,
+    opts?: ChannelEmitOptions,
+  ) => Promise<CadmusEvent>;
   /** Subscribe to all newly-appended events. Returns an unsubscribe function. */
   subscribe: (listener: (event: CadmusEvent) => void) => () => void;
   log: (msg: string, data?: unknown) => void;
