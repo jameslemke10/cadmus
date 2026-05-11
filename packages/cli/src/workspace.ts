@@ -39,6 +39,7 @@ export interface CadmusConfig {
     ANTHROPIC_API_KEY?: string;
     OPENAI_API_KEY?: string;
     TELEGRAM_BOT_TOKEN?: string;
+    BRAVE_SEARCH_API_KEY?: string;
   };
   port?: number;
   studioPort?: number;

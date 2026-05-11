@@ -473,13 +473,51 @@ async function cmdSetup(): Promise<void> {
 
   if (channelChoice === "telegram") {
     console.log("");
-    console.log(`  Get a bot token from ${blue("https://t.me/botfather")}`);
-    console.log(`  (send /newbot, name it, copy the token it gives you)`);
+    console.log(`  ${bold("Get a bot token from BotFather:")}`);
+    console.log(`    1. Open Telegram (phone, desktop, or ${blue("https://web.telegram.org")})`);
+    console.log(`    2. Search for ${bold("@BotFather")} and start a chat`);
+    console.log(`    3. Send ${bold("/newbot")} and follow the prompts (pick a name, then a username)`);
+    console.log(`    4. BotFather replies with your token — paste it below`);
+    console.log("");
     const token = (await readSecret("  Paste TELEGRAM_BOT_TOKEN (hidden): ")).trim();
     if (token) {
       apiKeys.TELEGRAM_BOT_TOKEN = token;
       console.log(`  ${dim(`Saved. Switch to the telly agent with: ${bold("cadmus use telly")}`)}`);
     }
+  }
+
+  // ── Tool step ──────────────────────────────────────────────────
+  // Optional secrets for built-in tools. Web search works without a key
+  // (DuckDuckGo fallback); Brave is a higher-quality upgrade.
+
+  console.log("");
+  const braveHint = apiKeys.BRAVE_SEARCH_API_KEY
+    ? `current: ${maskKey(apiKeys.BRAVE_SEARCH_API_KEY)}`
+    : "optional — improves web_search quality";
+
+  const toolChoice = await selectFromList({
+    prompt: `  ${bold("Configure web tools?")}`,
+    options: [
+      {
+        label: "Skip — DuckDuckGo is the default",
+        value: "skip",
+        hint: "no key needed for basic search",
+      },
+      {
+        label: "Add Brave Search API key",
+        value: "brave",
+        hint: braveHint,
+      },
+    ],
+    defaultIndex: 0,
+  });
+
+  if (toolChoice === "brave") {
+    console.log("");
+    console.log(`  Get a key: ${blue("https://brave.com/search/api/")}`);
+    console.log(`  ${dim("(free tier: 2k queries/month, no credit card)")}`);
+    const key = (await readSecret("  Paste BRAVE_SEARCH_API_KEY (hidden): ")).trim();
+    if (key) apiKeys.BRAVE_SEARCH_API_KEY = key;
   }
 
   updateConfig({ apiKeys });
