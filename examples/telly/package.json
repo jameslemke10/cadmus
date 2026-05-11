@@ -1,0 +1,12 @@
+{
+  "name": "@cadmus/example-telly",
+  "version": "0.1.0",
+  "description": "Telly — a Telegram-connected single-LLM agent.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cadmus/kernel": "0.1.0",
+    "@cadmus/tools": "0.1.0"
+  }
+}
