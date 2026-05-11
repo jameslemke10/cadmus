@@ -118,10 +118,15 @@ export default defineAgent({
   },
   processors: [
     // Hippocampus — retrieves relevant memories.
+    //
+    // Filter intentionally narrow: ONLY user-driven turns (input) and explicit
+    // subconscious surfacing trigger a retrieval pass. Filtering on tool_result
+    // would create a feedback loop now that the runtime auto-emits tool_result
+    // around the hippocampus's own memory_search calls.
     defineProcessor({
       name: "hippocampus",
       template: "llm",
-      filter: ["input", "tool_result", "subconscious_surfaced"],
+      filter: ["input", "subconscious_surfaced"],
       tools: ["memory_search"],
       outputEvents: ["memory_retrieved"],
       outputSchema: {

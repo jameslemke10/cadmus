@@ -40,11 +40,11 @@ export default defineAgent({
         output: {
           type: "object",
           properties: {
-            channel: { type: "string", default: "*" },
-            kind: { type: "string", default: "text" },
+            channel: { type: "string", description: "Target channel, or '*' to broadcast." },
+            kind: { type: "string", description: "Payload variant. Use 'text' for plain text." },
             text: { type: "string" },
           },
-          required: ["text"],
+          required: ["channel", "kind", "text"],
         },
       },
       templateConfig: {
