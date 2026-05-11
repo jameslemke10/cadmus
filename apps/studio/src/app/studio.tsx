@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { AgentSidebar } from "../components/AgentSidebar";
 import { BrainCanvas } from "../components/BrainCanvas";
 import { ChatPanel } from "../components/ChatPanel";
@@ -154,51 +155,60 @@ export function Studio() {
         </div>
       )}
 
-      <div
-        className={`flex-1 grid overflow-hidden ${
-          agent ? "grid-cols-[200px_1fr_400px]" : "grid-cols-[1fr_400px]"
-        }`}
-      >
-        {/* Agent sidebar (only when an agent is loaded) */}
-        {agent && (
-          <AgentSidebar
-            api={api}
-            currentAgentName={agent.id}
-            onSwitchRequest={() => undefined}
-          />
-        )}
-
-        {/* Canvas */}
-        <main className="relative bg-stone-50">
-          {agent ? (
-            <BrainCanvas
-              agent={agent}
-              latestEvent={latestEvent}
-              onProcessorClick={setSelectedProcessor}
-            />
-          ) : (
-            <div className="h-full flex items-center justify-center text-stone-400 text-sm">
-              waiting for kernel…
-            </div>
+      <div className="flex-1 overflow-hidden">
+        <PanelGroup
+          direction="horizontal"
+          autoSaveId={agent ? "cadmus-studio-layout-with-sidebar" : "cadmus-studio-layout-no-sidebar"}
+        >
+          {agent && (
+            <>
+              <Panel defaultSize={15} minSize={10} maxSize={30}>
+                <AgentSidebar
+                  api={api}
+                  currentAgentName={agent.id}
+                  onSwitchRequest={() => undefined}
+                />
+              </Panel>
+              <ResizeHandle />
+            </>
           )}
 
-          {timelineOpen && (
-            <TimelineDrawer
-              events={events}
-              onClose={() => setTimelineOpen(false)}
-            />
-          )}
-        </main>
+          <Panel defaultSize={55} minSize={30}>
+            <main className="relative bg-stone-50 h-full">
+              {agent ? (
+                <BrainCanvas
+                  agent={agent}
+                  latestEvent={latestEvent}
+                  onProcessorClick={setSelectedProcessor}
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center text-stone-400 text-sm">
+                  waiting for kernel…
+                </div>
+              )}
 
-        {/* Chat */}
-        <aside className="overflow-hidden">
-          <ChatPanel
-            api={api}
-            agent={agent}
-            events={events}
-            connected={connected}
-          />
-        </aside>
+              {timelineOpen && (
+                <TimelineDrawer
+                  events={events}
+                  onClose={() => setTimelineOpen(false)}
+                />
+              )}
+            </main>
+          </Panel>
+
+          <ResizeHandle />
+
+          <Panel defaultSize={30} minSize={20} maxSize={50}>
+            <aside className="overflow-hidden h-full">
+              <ChatPanel
+                api={api}
+                agent={agent}
+                events={events}
+                connected={connected}
+              />
+            </aside>
+          </Panel>
+        </PanelGroup>
       </div>
 
       <ProcessorInspector
@@ -211,6 +221,15 @@ export function Studio() {
         <SetupWizard status={status} onDismiss={() => setWizardDismissed(true)} />
       )}
     </div>
+  );
+}
+
+function ResizeHandle() {
+  return (
+    <PanelResizeHandle className="group relative w-1 bg-stone-200 hover:bg-stone-400 data-[resize-handle-state=drag]:bg-stone-600 transition-colors cursor-col-resize">
+      {/* Wider hover hit area without changing visual width */}
+      <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
+    </PanelResizeHandle>
   );
 }
 

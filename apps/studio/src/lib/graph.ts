@@ -13,12 +13,11 @@ const ROW_HEIGHT = 180;
 /**
  * Build React Flow nodes + edges from the agent's processor list.
  *
- * - Nodes: one per processor. Layout: topological-ish columns (event-source
- *   roots on the left, terminal processors on the right). Falls back to a
- *   simple grid if there are cycles.
- * - Edges: one per (emitter.outputEvents ∩ consumer.filter) overlap, labelled
- *   with the event type. Multiple overlaps between the same pair become
- *   multiple edges (one per event type).
+ * - Nodes: one per processor, laid out in topological-ish columns. Cyclic
+ *   back-edges (e.g. executor's pfc_loop → hippocampus) are ignored for
+ *   layering — the processor at the cycle's "entry point" (one that also
+ *   takes external input) is placed greedily so the rest can chain off it.
+ * - Edges: one per (emitter.outputEvent → consumer.filter) match.
  */
 export function buildGraph(processors: ProcessorMeta[]): {
   nodes: Node<ProcessorNodeData>[];
@@ -70,17 +69,25 @@ export function buildGraph(processors: ProcessorMeta[]): {
 }
 
 /**
- * Group processors into layers based on event flow:
- * Layer 0 = processors whose filter is satisfied by external events
- * (input, notification_received, timer_fired) only.
- * Layer N = processors whose filter is satisfied by events emitted by
- * processors in layers ≤ N-1.
+ * Place each processor on a layer (column) based on event flow.
+ *
+ * A processor is placed greedily as soon as at least one of its filter
+ * entries is satisfied — either by an external event (input,
+ * timer_fired, notification_received) or by an emitter that's already
+ * been placed. Filter entries that point at unplaced emitters are
+ * ignored at that moment; if those emitters get placed in a later pass,
+ * the placement here doesn't move (back-edges remain back-edges).
+ *
+ * This handles the brain example's loop: hippocampus takes
+ * `["input", "pfc_loop"]` where pfc_loop comes from executor (which
+ * itself depends back through pfc → thalamus → hippocampus). Pre-fix,
+ * the algorithm refused to place hippocampus until pfc_loop's emitter
+ * was placed, but executor's chain ultimately required hippocampus, so
+ * nothing got placed and everything fell into the layer-0 fallback.
  */
 function layerProcessors(processors: ProcessorMeta[]): ProcessorMeta[][] {
   const EXTERNAL_TYPES = new Set(["input", "notification_received", "timer_fired"]);
-  const byName = new Map(processors.map((p) => [p.name, p] as const));
 
-  // Map event type -> processors that emit it.
   const emittersOf = new Map<string, ProcessorMeta[]>();
   for (const p of processors) {
     for (const t of p.outputEvents ?? []) {
@@ -90,53 +97,46 @@ function layerProcessors(processors: ProcessorMeta[]): ProcessorMeta[][] {
   }
 
   const layer = new Map<string, number>();
-  let progress = true;
-  // up to N passes — handles linear chains and joins, not cycles.
-  for (let pass = 0; pass < processors.length + 2 && progress; pass++) {
-    progress = false;
+  let changed = true;
+  for (let pass = 0; pass < processors.length + 2 && changed; pass++) {
+    changed = false;
     for (const p of processors) {
       if (layer.has(p.name)) continue;
 
-      let maxPredecessor = -1;
-      let allResolved = true;
+      let bestResolved = -Infinity; // highest layer of any already-placed predecessor
+      let hasExternal = false;
+
       for (const t of filterEventTypes(p.filter)) {
         if (EXTERNAL_TYPES.has(t)) {
-          maxPredecessor = Math.max(maxPredecessor, -1); // external = layer 0 input
+          hasExternal = true;
           continue;
         }
         const emitters = emittersOf.get(t) ?? [];
         if (emitters.length === 0) {
-          // nothing emits this — treat as external
+          // Nothing emits this — treat as external (could be manually injected).
+          hasExternal = true;
           continue;
         }
-        let bestEmitterLayer = -Infinity;
-        let anyEmitterUnresolved = false;
         for (const e of emitters) {
-          if (e.name === p.name) continue; // self-loop, ignore
+          if (e.name === p.name) continue; // self-loop
           const eLayer = layer.get(e.name);
-          if (eLayer === undefined) {
-            anyEmitterUnresolved = true;
-          } else {
-            bestEmitterLayer = Math.max(bestEmitterLayer, eLayer);
+          if (eLayer !== undefined) {
+            bestResolved = Math.max(bestResolved, eLayer);
           }
-        }
-        if (anyEmitterUnresolved && bestEmitterLayer === -Infinity) {
-          allResolved = false;
-          break;
-        }
-        if (bestEmitterLayer !== -Infinity) {
-          maxPredecessor = Math.max(maxPredecessor, bestEmitterLayer);
+          // Unresolved emitters are ignored — they become back-edges.
         }
       }
 
-      if (allResolved) {
-        layer.set(p.name, maxPredecessor + 1);
-        progress = true;
+      // Place greedily if anything resolved OR there's an external trigger.
+      if (hasExternal || bestResolved !== -Infinity) {
+        const place = bestResolved !== -Infinity ? bestResolved + 1 : 0;
+        layer.set(p.name, place);
+        changed = true;
       }
     }
   }
 
-  // Anything still unresolved (cycles) — drop in layer 0.
+  // Anything still unresolved (pure cycle with no entry point) — drop in layer 0.
   for (const p of processors) {
     if (!layer.has(p.name)) layer.set(p.name, 0);
   }
