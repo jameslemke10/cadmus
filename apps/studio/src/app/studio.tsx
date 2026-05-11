@@ -7,6 +7,7 @@ import { ChatPanel } from "../components/ChatPanel";
 import { ProcessorInspector } from "../components/ProcessorInspector";
 import { SetupWizard } from "../components/SetupWizard";
 import { DEFAULT_API, fetchAgent } from "../lib/api";
+import { filterMatchesEvent } from "../lib/filter";
 import type { AgentMeta, CadmusEvent } from "../lib/types";
 
 interface KernelStatus {
@@ -127,7 +128,7 @@ export function Studio() {
     for (const p of agent.processors) counts.set(p.name, 0);
     for (const e of events) {
       for (const p of agent.processors) {
-        if (p.filter.includes(e.type)) {
+        if (filterMatchesEvent(p.filter, e)) {
           counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
         }
       }

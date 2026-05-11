@@ -11,10 +11,13 @@ export interface CadmusEvent {
   tags: string[];
 }
 
+/** Matches the kernel's FilterEntry: a bare event-type string OR a {type, source} object. */
+export type FilterEntry = string | { type: string; source?: string };
+
 export interface ProcessorMeta {
   name: string;
   template: "llm" | "code";
-  filter: string[];
+  filter: FilterEntry[];
   outputEvents: string[];
   tools: string[];
   inputSchema?: Record<string, unknown>;

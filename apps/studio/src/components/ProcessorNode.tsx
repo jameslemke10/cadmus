@@ -2,6 +2,7 @@
 
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import type { ProcessorNodeData } from "../lib/graph";
+import { filterEntryLabel } from "../lib/filter";
 
 const TEMPLATE_COLORS: Record<string, string> = {
   llm: "bg-violet-50 border-violet-200 text-violet-900",
@@ -42,14 +43,18 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
           listens to
         </div>
         <div className="flex flex-wrap gap-1">
-          {processor.filter.map((f) => (
-            <span
-              key={f}
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-700"
-            >
-              {f}
-            </span>
-          ))}
+          {processor.filter.map((f, i) => {
+            const label = filterEntryLabel(f);
+            return (
+              <span
+                key={`${label}_${i}`}
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-700"
+                title={typeof f === "string" ? undefined : `type: ${f.type}${f.source ? `\nsource: ${f.source}` : ""}`}
+              >
+                {label}
+              </span>
+            );
+          })}
         </div>
 
         {processor.outputEvents.length > 0 && (

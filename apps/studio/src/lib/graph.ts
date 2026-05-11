@@ -1,5 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ProcessorMeta } from "./types";
+import { filterEventTypes, filterMatchesType } from "./filter";
 
 export interface ProcessorNodeData extends Record<string, unknown> {
   processor: ProcessorMeta;
@@ -41,7 +42,7 @@ export function buildGraph(processors: ProcessorMeta[]): {
   for (const emitter of processors) {
     for (const eventType of emitter.outputEvents ?? []) {
       for (const consumer of processors) {
-        if (consumer.filter.includes(eventType)) {
+        if (filterMatchesType(consumer.filter, eventType)) {
           edges.push({
             id: `${emitter.name}__${eventType}__${consumer.name}`,
             source: emitter.name,
@@ -98,7 +99,7 @@ function layerProcessors(processors: ProcessorMeta[]): ProcessorMeta[][] {
 
       let maxPredecessor = -1;
       let allResolved = true;
-      for (const t of p.filter) {
+      for (const t of filterEventTypes(p.filter)) {
         if (EXTERNAL_TYPES.has(t)) {
           maxPredecessor = Math.max(maxPredecessor, -1); // external = layer 0 input
           continue;

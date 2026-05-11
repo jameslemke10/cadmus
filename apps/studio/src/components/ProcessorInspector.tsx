@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { ProcessorMeta } from "../lib/types";
+import { filterEntryLabel } from "../lib/filter";
 
 interface Props {
   processor: ProcessorMeta | null;
@@ -57,7 +58,10 @@ export function ProcessorInspector({ processor, recentEvents, onClose }: Props) 
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           <Section label="Listens to (filter)">
-            <ChipList items={processor.filter} colorClass="bg-stone-100 text-stone-700" />
+            <ChipList
+              items={processor.filter.map(filterEntryLabel)}
+              colorClass="bg-stone-100 text-stone-700"
+            />
           </Section>
 
           {processor.outputEvents.length > 0 && (

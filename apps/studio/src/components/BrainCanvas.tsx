@@ -15,6 +15,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, useRef } from "react";
 import { buildGraph, type ProcessorNodeData } from "../lib/graph";
+import { filterMatchesEvent } from "../lib/filter";
 import type { AgentMeta, CadmusEvent } from "../lib/types";
 import { ProcessorNode } from "./ProcessorNode";
 
