@@ -20,12 +20,13 @@ import { filterMatchesEvent } from "../lib/filter";
 import type { AgentMeta, CadmusEvent } from "../lib/types";
 import { ProcessorNode } from "./ProcessorNode";
 import { ChannelNode, type ChannelNodeData } from "./ChannelNode";
+import { MemoryNode, type MemoryNodeData } from "./MemoryNode";
 
-const nodeTypes = { processor: ProcessorNode, channel: ChannelNode };
+const nodeTypes = { processor: ProcessorNode, channel: ChannelNode, memory: MemoryNode };
 
 type Position = { x: number; y: number };
 type SavedPositions = Record<string, Position>;
-type AnyNodeData = ProcessorNodeData | ChannelNodeData;
+type AnyNodeData = ProcessorNodeData | ChannelNodeData | MemoryNodeData;
 
 function positionsKey(agentId: string): string {
   return `cadmus.studio.nodePositions.${agentId}`;

@@ -2,39 +2,40 @@ import type { Edge, Node } from "@xyflow/react";
 import type { ChannelMeta, ProcessorMeta } from "./types";
 import { filterEventTypes, filterMatchesType } from "./filter";
 import type { ChannelNodeData } from "../components/ChannelNode";
+import type { MemoryNodeData } from "../components/MemoryNode";
 
 export interface ProcessorNodeData extends Record<string, unknown> {
   processor: ProcessorMeta;
   pulse: number;
 }
 
-const COLUMN_WIDTH = 320;
-const ROW_HEIGHT = 180;
+// Spacing is generous on purpose: edge labels need room and React Flow's
+// smoothstep router needs vertical space to curve cleanly without crossing
+// nodes.
+const COLUMN_WIDTH = 380;
+const ROW_HEIGHT = 200;
+
+const MEMORY_NODE_ID = "memory:store";
 
 /**
- * Build React Flow nodes + edges from the agent's processors + channels.
- *
- * - Processors are laid out in topological-ish columns.
- * - Each channel becomes (up to) two channel nodes:
- *     - an "inbound" source on the far left (if it emits anything)
- *     - an "outbound" sink on the far right (if it routes anything)
- * - Edges connect channel sources → processors that filter on the channel's
- *   inbound events, and processors that emit a channel's outbound events
- *   → that channel sink.
- * - Cyclic back-edges between processors are ignored for layering and
- *   render as natural back-curves on the graph.
+ * Tools that read or write memory. Anything in either list draws an edge
+ * to the memory node from the processor's card. (Tool names are stable;
+ * adding a custom memory backend's tools later is a one-line change.)
  */
+const MEMORY_READ_TOOLS = new Set(["memory_search", "memory_get"]);
+const MEMORY_WRITE_TOOLS = new Set(["memory_write", "memory_delete"]);
+
 export function buildGraph(
   processors: ProcessorMeta[],
   channels: ChannelMeta[] = [],
 ): {
-  nodes: Node<ProcessorNodeData | ChannelNodeData>[];
+  nodes: Node<ProcessorNodeData | ChannelNodeData | MemoryNodeData>[];
   edges: Edge[];
 } {
   const layers = layerProcessors(processors);
   const procColumns = layers.length;
 
-  const nodes: Node<ProcessorNodeData | ChannelNodeData>[] = [];
+  const nodes: Node<ProcessorNodeData | ChannelNodeData | MemoryNodeData>[] = [];
 
   // Inbound channel sources go to the LEFT of the first processor column.
   const inboundChannels = channels.filter((c) => (c.inboundEvents ?? []).length > 0);
@@ -72,9 +73,26 @@ export function buildGraph(
     });
   }
 
+  // Memory node — show it if any processor uses memory tools. Position below
+  // the processors in the middle of the canvas.
+  const memoryUsers = processors.filter((p) =>
+    (p.tools ?? []).some((t) => MEMORY_READ_TOOLS.has(t) || MEMORY_WRITE_TOOLS.has(t)),
+  );
+  if (memoryUsers.length > 0) {
+    const maxRowsPerLayer = Math.max(...layers.map((l) => l.length), 1);
+    const memoryY = 60 + maxRowsPerLayer * ROW_HEIGHT + 40;
+    const memoryX = procXOffset + Math.floor(procColumns / 2) * COLUMN_WIDTH;
+    nodes.push({
+      id: MEMORY_NODE_ID,
+      type: "memory",
+      position: { x: memoryX, y: memoryY },
+      data: { pulse: 0 },
+    });
+  }
+
   const edges: Edge[] = [];
 
-  // Processor → processor edges (existing logic).
+  // Processor → processor edges.
   for (const emitter of processors) {
     for (const eventType of emitter.outputEvents ?? []) {
       for (const consumer of processors) {
@@ -104,6 +122,47 @@ export function buildGraph(
           edges.push(makeEdge(emitter.name, `channel-out:${ch.name}`, eventType));
         }
       }
+    }
+  }
+
+  // Memory edges: read (memory → processor, green) and write (processor → memory, red).
+  for (const p of memoryUsers) {
+    const tools = p.tools ?? [];
+    const reads = tools.filter((t) => MEMORY_READ_TOOLS.has(t));
+    const writes = tools.filter((t) => MEMORY_WRITE_TOOLS.has(t));
+    if (reads.length > 0) {
+      edges.push({
+        id: `${MEMORY_NODE_ID}__read__${p.name}`,
+        source: MEMORY_NODE_ID,
+        sourceHandle: "read-out",
+        target: p.name,
+        label: "read",
+        type: "smoothstep",
+        animated: false,
+        style: { stroke: "#10b981", strokeWidth: 1.5, strokeDasharray: "4 3" },
+        labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#047857" },
+        labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
+        labelBgPadding: [3, 2] as [number, number],
+        labelBgBorderRadius: 4,
+        data: { eventType: "memory-read" },
+      });
+    }
+    if (writes.length > 0) {
+      edges.push({
+        id: `${p.name}__write__${MEMORY_NODE_ID}`,
+        source: p.name,
+        target: MEMORY_NODE_ID,
+        targetHandle: "write-in",
+        label: "write",
+        type: "smoothstep",
+        animated: false,
+        style: { stroke: "#ef4444", strokeWidth: 1.5, strokeDasharray: "4 3" },
+        labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#b91c1c" },
+        labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
+        labelBgPadding: [3, 2] as [number, number],
+        labelBgBorderRadius: 4,
+        data: { eventType: "memory-write" },
+      });
     }
   }
 

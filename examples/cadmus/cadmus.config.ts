@@ -7,10 +7,7 @@
  * here — an agentic framework — and a new conquest: helping people build
  * agents that push the world forward.
  *
- * Architecturally: five processors chained on each other's custom events,
- * NOT on tool_result. The runtime auto-emits tool_call/tool_result around
- * every ctx.callTool, so filtering on those would cause self-triggering
- * loops. Each processor instead listens for the prior stage's named output:
+ * Five processors chained on each other's custom events:
  *
  *   input        ─┐                              ┌──► (executor emits pfc_loop)
  *                 ▼                              │
@@ -24,65 +21,29 @@
  *                                                                          │
  *                                                  ┌───── output ◄─────────┤
  *                                                  └── pfc_loop ◄──────────┘
- *                                                  (when PFC needs more work)
  *
- * Thalamus uses a source-constrained filter to demonstrate v1.x's
- * attribution-aware filtering: `{ type, source: "processor:hippocampus" }`.
- * That's overkill with one hippocampus, but lets you add a second
- * (hippocampus_pii, hippocampus_general) later without rewiring downstream.
- *
- * Memory lives in SQLite via @cadmus/tools/memory. The Cadmus persona is
- * carried in the PFC's system prompt; richer identity / mythology
- * memories accumulate via memory_write tool calls.
+ * The PFC has web tools (search + fetch) so it can actually go look at
+ * the world. Memory is SQLite-backed and persists across runs.
  *
  * For the boring single-processor agent, see ../claudius.
+ * For a Telegram-connected agent, see ../telly.
  */
 
 import {
   defineAgent,
   defineProcessor,
-  defineTool,
   type CadmusEvent,
   type ProcessorContext,
 } from "@cadmus/kernel";
 import { createMemory } from "@cadmus/tools/memory";
+import { webSearch, webFetch } from "@cadmus/tools/web";
 
 const memory = createMemory({ path: ".cadmus/memory.db" });
-
-const calculate = defineTool({
-  name: "calculate",
-  description: "Evaluate a basic arithmetic expression. Supports + - * / ( ) and decimals.",
-  input_schema: {
-    type: "object",
-    properties: { expression: { type: "string" } },
-    required: ["expression"],
-  },
-  handler: async (args) => {
-    const expr = (args as { expression: string }).expression;
-    if (!/^[\d+\-*/().\s]+$/.test(expr)) {
-      throw new Error("expression contains invalid characters");
-    }
-    // eslint-disable-next-line no-new-func
-    const result = new Function(`return (${expr})`)() as number;
-    return { expression: expr, result };
-  },
-});
-
-const getCurrentTime = defineTool({
-  name: "get_current_time",
-  description: "Return the current ISO 8601 timestamp.",
-  input_schema: { type: "object", properties: {} },
-  handler: async () => ({ now: new Date().toISOString() }),
-});
 
 /**
  * Executor — dispatches the PFC's planned tool_calls, emits the user-facing
  * output if PFC produced one, and emits pfc_loop if PFC produced tool_calls
- * but no response_to_user (i.e., the LLM wants another reasoning pass once
- * results come back).
- *
- * Safety: caps the loop at 3 cycles via the trigger event chain depth so a
- * runaway PFC can't burn infinite tokens.
+ * but no response_to_user.
  */
 async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promise<void> {
   const data = event.data as {
@@ -93,7 +54,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
   const responseText = (data.response_to_user ?? "").trim();
   const toolCalls = data.tool_calls ?? [];
 
-  // 1) If PFC produced a user-facing message, deliver it.
   if (responseText) {
     await ctx.emit("output", {
       channel: "*",
@@ -102,8 +62,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     });
   }
 
-  // 2) Run any tool_calls the PFC asked for. The runtime auto-emits
-  //    tool_call/tool_result around each callTool invocation.
   for (const call of toolCalls) {
     try {
       await ctx.callTool(call.tool, call.args);
@@ -112,8 +70,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
     }
   }
 
-  // 3) Decide whether to loop. PFC didn't say anything to the user and
-  //    ran some tools → it probably needs another pass with the results.
   if (!responseText && toolCalls.length > 0) {
     const depth = await countLoopDepth(ctx);
     if (depth >= 3) {
@@ -129,7 +85,6 @@ async function executorHandler(event: CadmusEvent, ctx: ProcessorContext): Promi
   }
 }
 
-/** Count pfc_loop events between the original input and the current trigger. */
 async function countLoopDepth(ctx: ProcessorContext): Promise<number> {
   let depth = 0;
   let cursor: CadmusEvent | null = ctx.triggerEvent;
@@ -145,13 +100,12 @@ export default defineAgent({
   agentId: "cadmus",
   name: "Cadmus",
   tools: {
-    ...memory.tools,
-    calculate,
-    get_current_time: getCurrentTime,
+    ...memory.tools,    // memory_search, memory_write, memory_delete
+    web_search: webSearch,
+    web_fetch: webFetch,
   },
   processors: [
     // Hippocampus — retrieves relevant memories.
-    // Triggers: a fresh user message, or executor signaling the PFC wants another pass.
     defineProcessor({
       name: "hippocampus",
       template: "llm",
@@ -191,16 +145,12 @@ Workflow:
 1. Read the trigger event and recent timeline.
 2. Decide what information would be useful for the next reasoning step.
 3. Call memory_search 1-3 times with distinct, specific queries. You may filter by kind ("procedural" / "semantic" / "episodic") when targeting a specific kind of recall.
-4. Call emit_memory_retrieved with { queries: [...], results: [...] } containing the merged, deduplicated, ranked results.
-5. Stop.
-
-Be parsimonious. Three searches max. The downstream thalamus will decide what makes it into working memory.`,
+4. Call emit_memory_retrieved EXACTLY ONCE with { queries: [...], results: [...] } containing the merged, deduplicated, ranked results.
+5. Stop. Do not call any tools after emitting.`,
       },
     }),
 
     // Thalamus — assembles working memory.
-    // Source-constrained filter: only fires for memory_retrieved events from the hippocampus.
-    // If someone adds hippocampus_pii / hippocampus_general later, this stays correct.
     defineProcessor({
       name: "thalamus",
       template: "llm",
@@ -226,16 +176,16 @@ Your job: assemble working memory for the PFC. Given the timeline (recent events
 
 Compress the conversation history. Identify the current goal. Surface the 2-5 most relevant memories. Note any recent tool results. Be concise — every token matters because this is what the PFC sees.
 
-Call emit_working_memory_updated with { conversation_history, current_goal, relevant_memories, recent_results }. Then stop.`,
+Call emit_working_memory_updated EXACTLY ONCE with { conversation_history, current_goal, relevant_memories, recent_results }. Then stop. Do not call any tools after emitting.`,
       },
     }),
 
-    // PFC — the conscious reasoner. Triggers only on working_memory_updated from the thalamus.
+    // PFC — the conscious reasoner. Plans, reaches into the web, decides on the response.
     defineProcessor({
       name: "pfc",
       template: "llm",
       filter: [{ type: "working_memory_updated", source: "processor:thalamus" }],
-      tools: ["calculate", "get_current_time", "memory_write"],
+      tools: ["web_search", "web_fetch", "memory_write"],
       outputEvents: ["pfc_response"],
       outputSchema: {
         pfc_response: {
@@ -273,7 +223,7 @@ Voice:
 - Warm but not deferential. You have opinions; share them.
 
 Output structure:
-- tool_calls: actions the executor should run (e.g. calculate, get_current_time, memory_write).
+- tool_calls: actions the executor should run (web_search, web_fetch, memory_write).
 - response_to_user: a message to the user — your actual reply.
 
 Looping: if you set tool_calls but leave response_to_user empty, the executor will run the tools and re-trigger the pipeline so you can react to the results. Set response_to_user when you're ready to talk to the user; that ends the loop.
@@ -284,13 +234,11 @@ Memory writes are first-class:
   - kind: "procedural"                     → how-to / skills
   - kind: "episodic"                       → notable events
 
-Call emit_pfc_response exactly once with { tool_calls: [...], response_to_user: "..." }, then STOP. Do NOT call calculate / get_current_time / memory_write directly — describe them as tool_calls. Do not loop within an iteration.`,
+Call emit_pfc_response EXACTLY ONCE with { tool_calls: [...], response_to_user: "..." }, then STOP. Do NOT call the executor's tools (web_search / web_fetch / memory_write) directly here — describe them as tool_calls in the emitted event so the executor handles them.`,
       },
     }),
 
-    // Executor — runs the PFC's planned tool_calls. Code processor, no LLM.
-    // Emits `output` when PFC has a response_to_user, and `pfc_loop` when PFC
-    // ran tools but didn't yet respond.
+    // Executor — runs the PFC's planned tool_calls.
     defineProcessor({
       name: "executor",
       template: "code",
