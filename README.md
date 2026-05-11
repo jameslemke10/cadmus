@@ -1,13 +1,13 @@
 # Cadmus
 
-**Every agent framework manages context windows. Cadmus manages cognition.**
+**An open-source framework for building AI agents that runs on an event-driven architecture.** Every decision, tool call, memory write, and message is a typed event on an append-only timeline. Processors subscribe to event types and emit new ones; the shape of your agent is the way you wire them together.
 
-Cadmus is an open-source framework for building AI agents around an append-only timeline of typed events. Processors subscribe to event types and emit new events; the shape of an agent emerges from how the processors are wired. The brain pattern (hippocampus → thalamus → PFC → executor) is one example. The simplest user-input → response loop is another. Build whatever shape fits your problem.
+That sounds abstract, but the punchline is concrete: **agents stop being black-box loops and become inspectable cognitive pipelines.** You can replay them, audit them, debug them with a real timeline, and swap pieces without rewriting the whole thing.
 
 ```
 ┌──────────────────────────────────────────────────┐
 │                   TIMELINE (SQLite)              │
-│  ···→ [evt1] → [evt2] → [evt3] → [evt4] → ···   │
+│  ···→ [evt1] → [evt2] → [evt3] → [evt4] → ···    │
 └────┬─────────────────┬──────────────────┬────────┘
      │                 │                  │
  ┌───▼────┐     ┌──────▼──────┐    ┌──────▼──────┐
@@ -16,29 +16,124 @@ Cadmus is an open-source framework for building AI agents around an append-only 
  └────────┘     └─────────────┘    └─────────────┘
 ```
 
----
+## What's in the box
 
-## Install
+The kernel ships with batteries for the things every agent needs, then gets out of your way:
 
-One line:
+- **Tools** — built-in `memory_search` / `memory_write` / `memory_delete`, `web_search` / `web_fetch`, `bash` (opt-in), filesystem, time, and an MCP bridge. Write your own — a tool is a name + JSON-Schema input + async handler.
+- **Channels** — the bridge between an external system (your terminal, the Studio UI, eventually Slack/Telegram/voice) and the timeline. Channels emit `input` events and route `output` events back. The CLI channel and Studio channel are built in.
+- **Memory** — SQLite-backed by default, with three canonical kinds: `procedural` (skills), `semantic` (facts), `episodic` (events). Backend is pluggable; backends are interchangeable because every memory write hits the timeline and replay rebuilds the store.
+- **Timeline** — typed events with full attribution (you can always see *which* processor emitted *which* event). Append-only, indexed, queryable, durable.
+
+But that's just the foundation. **Cadmus is a playground.** Define your own event types. Write a processor that summarizes conversations every N turns. Wire two LLMs in series. Add a processor that watches the agent and yells when costs spike. The framework knows nothing about brain regions or chat assistants — those are just patterns you can compose.
+
+## Quick start
 
 ```bash
+# Install
 curl -fsSL https://raw.githubusercontent.com/jameslemke10/cadmus/main/install.sh | bash
+
+# Drop in your API key (free Gemini key recommended)
+cadmus setup
+
+# Boot the active agent + Studio UI
+cadmus start
 ```
 
-Then:
+That opens [Studio](#studio) in your browser. Talk to the agent in the chat panel; watch its cognition flow through the brain canvas in real time.
+
+Daily commands you'll use:
 
 ```bash
-cadmus setup        # paste your GOOGLE_API_KEY (or ANTHROPIC_API_KEY)
-cadmus start        # opens Studio in your browser
+cadmus start            # boot kernel + Studio
+cadmus stop             # kill anything running
+cadmus list             # see installed agents (★ = active)
+cadmus use <name>       # switch active agent
+cadmus add <name>       # scaffold a new agent
 ```
 
-The installer drops everything into `~/.cadmus/` and ships two agents pre-installed:
+Full CLI reference is at the [bottom](#cli) of this README.
 
-- **Cadmus** — the flagship. Five-processor brain pipeline with retrieved memory and working-memory assembly.
-- **Claudius** — a Claude-style chat assistant. Single LLM processor, persistent memory, session boundaries. Closer to what most developers already know.
+## How it works — through the two example agents
 
-Switch between them: `cadmus use cadmus` or `cadmus use claudius`.
+Cadmus ships with two pre-installed agents. Both solve the same problem (you say something, the agent does something) but they show very different shapes the framework supports.
+
+### Claudius — the familiar shape, with sharper context
+
+```
+input ─────────────┐
+tool_result ───────┤
+session_start ─────┼─▶ pfc (llm + tools) ─▶ output
+conversation_      │       │
+compacted ─────────┘       └─▶ tool_call → tool_result ─▶ pfc loops on the result
+```
+
+This is what most chat agents look like today: one LLM processor in a loop. It reads the recent timeline, picks tool calls, tool results come back, it eventually replies. Done.
+
+What Claudius adds on top of the typical loop is **session-aware context**:
+
+- **`session_start`** — a marker event the model treats as a hard boundary. Everything before is invisible. Like `/clear` in Claude Code.
+- **`conversation_compacted`** — a marker event that carries a summary of the prior conversation in `data.summary`. The model treats events from this point as the new "beginning" and uses the summary as authoritative context. Like Claude's automatic compaction.
+
+You inject either event from the Studio timeline drawer or via `curl POST /api/inject`. Both events are *patterns* — the kernel honors them via the processor's `sessionEvents` config. There's no built-in summarizer yet; for now `conversation_compacted` is something you (or a future processor) emit yourself with a hand-crafted summary. The plumbing is there; the agent that fills it in is a small `code` processor away.
+
+Memory in Claudius is the canonical SQLite store from `@cadmus/tools/memory` — survives restarts, survives session boundaries, gets searched across sessions.
+
+### Cadmus — the brain pipeline
+
+```
+                ┌─► (executor emits pfc_loop when the LLM needs another pass)
+                │
+   input ───────┴───► hippocampus ──memory_retrieved──► thalamus
+                                                          │
+                                            working_memory_updated
+                                                          │
+                                                          ▼
+                                                         pfc ──pfc_response──► executor
+                                                                                  │
+                                                          ┌──── output ◄──────────┤
+                                                          └── pfc_loop ◄──────────┘
+```
+
+The Cadmus agent sidesteps the "session" framing entirely. Instead of compacting the conversation when it grows too long, it borrows a slice of how a brain handles attention:
+
+- **Hippocampus** — small fast LLM. Watches for new input or `pfc_loop` signals. Runs targeted memory searches and emits a `memory_retrieved` event with relevant records. (Memory recall.)
+- **Thalamus** — small fast LLM. Sees the trigger, the retrieved memories, and the recent timeline. Decides what the PFC actually needs to know *right now* and emits `working_memory_updated` — a tight, curated snapshot. (Working memory assembly.)
+- **PFC** — the conscious reasoner. Larger model. Sees *only* the working_memory_updated event. Plans actions, drafts the reply, decides on tool calls. Emits `pfc_response`.
+- **Executor** — code processor (no LLM). Runs the PFC's tool calls and emits either `output` (final reply) or `pfc_loop` (PFC needs more info — re-trigger hippocampus).
+
+The point isn't that "brain-shaped" is mystically better. The point is what this *unlocks*:
+
+**Adaptive context.** Each LLM call sees only what it needs. The PFC doesn't get a 30k-token transcript; it gets a curated paragraph. The agent decides what's relevant per turn instead of stuffing everything into one ever-growing context window. That makes it cheaper, faster, and crucially — it stops degrading as conversations get long.
+
+**Decomposed reasoning.** Memory recall, attention, and reasoning live in different processors with different models, different prompts, different costs. You can swap in a bigger model for the PFC without paying for it on every memory lookup.
+
+**Inspectable cognition.** Every step is an event on the timeline with a `source` field saying which processor emitted it. You can see exactly what the agent retrieved, what made it into working memory, and what the PFC reasoned over.
+
+## Build your own
+
+The two examples are starting points, not destinations. Drop them and write something that fits your problem.
+
+```bash
+cadmus add my-agent     # scaffolds ~/.cadmus/agents/my-agent/cadmus.config.ts
+cadmus use my-agent
+cadmus start
+```
+
+The scaffold is a working single-processor agent with persistent memory. Edit the config and reload. Common starting points:
+
+- **A research agent** — add `web_search` + `web_fetch` tools, write a processor that emits structured `finding` events, write a second processor that aggregates them into a report.
+- **A code reviewer** — add `bash` (opt-in) and `read_file` tools, give the PFC a system prompt about review style, wire a vitals processor that flags PRs whose cost crosses a threshold.
+- **A scheduler** — write a `code` processor that emits `timer_fired` events on a schedule. Any other processor can filter on them.
+- **A multi-LLM critic** — wire two PFCs. The first drafts; the second critiques and either approves or asks for a revision. The two filter on each other's outputs.
+
+**Contributing back** — three orthogonal surfaces:
+
+- A new tool → `@cadmus/tools` package. Smallest reviewable PR.
+- A new channel (Slack, Telegram, Discord) → conforms to the `Channel` interface in [spec/channel.md](spec/channel.md).
+- A new memory backend (Postgres, pgvector, Pinecone) → conforms to `MemoryStore` in [spec/memory.md](spec/memory.md). Runs against `assertMemoryStoreConforms` for free.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for shaped tasks.
 
 ---
 
@@ -47,65 +142,50 @@ Switch between them: `cadmus use cadmus` or `cadmus use claudius`.
 When `cadmus start` runs, your browser opens to Studio at `http://localhost:3001`.
 
 - **Agent sidebar (left):** every agent in `~/.cadmus/agents/`. Click to switch.
-- **Brain canvas (center):** every processor rendered as a node. Edges show event flow (which processor's output triggers which other processor's filter). Click a node to inspect its system prompt, model, and tools. Edges and nodes pulse green as events flow through.
-- **Chat (right):** talk to the agent.
-- **Timeline drawer (📜 toolbar):** every event as it lands.
+- **Brain canvas (center):** processors as nodes, event flow as edges. Edges and nodes pulse green as events flow through. Click a node to inspect its system prompt, model, and tools.
+- **Chat (right):** talk to the agent. Messages go in as `input` events with `channel: "studio"`; replies come back as `output` events routed to the same channel.
+- **Timeline drawer (📜 toolbar):** every event as it lands, with type, source attribution, and payload preview.
 
-The kernel and Studio talk over HTTP and Server-Sent Events on `localhost:4000`. The browser opens automatically.
+The kernel and Studio talk over HTTP and SSE on `localhost:4000`. Browser opens automatically.
 
 ---
 
-## How it works
+## How it works under the hood
 
 ### Three primitives
 
-1. **Event** — `{ id, seq, timestamp, type, agent_id, data, parent_event_id, tags }`. Append-only. Any string is a valid `type`.
-2. **Processor** — `{ name, template, filter, outputEvents, tools, templateConfig | handler }`. Subscribes to event types via `filter`, emits new ones via `outputEvents`.
-3. **Tool** — JSON-schema input + handler. Processors declare which tools they can call.
+1. **Event** — `{ id, seq, timestamp, type, agent_id, session_id, source, parent_event_id, tags, data }`. Append-only. Any string is a valid `type`. The `source` field auto-attributes who emitted it (`processor:<name>` | `channel:<name>` | `tool:<name>` | `kernel`).
+2. **Processor** — `{ name, template, filter, outputEvents, tools, templateConfig | handler }`. Subscribes to events via `filter` (bare event types OR `{type, source}` for attribution-aware matches), emits new ones via `outputEvents`.
+3. **Tool** — JSON-schema input + async handler. Processors declare which tools they can call.
 
 ### Two templates
 
-- **`llm`** — calls a model. Synthesized `emit_<type>` tools wrap each output event so the model emits events by tool-calling. Provider auto-detected from model name (`gemini-*` → Google, `claude-*` → Anthropic).
+- **`llm`** — calls a model. Synthesized `emit_<type>` tools wrap each output event so the model emits by tool-calling. Provider auto-detected from model name (`gemini-*` → Google, `claude-*` → Anthropic).
 - **`code`** — your async handler with `(event, ctx) => Promise<void>`. Same `ctx.emit` and `ctx.callTool`. No LLM cost, deterministic.
 
 ### Storage
 
-SQLite via `better-sqlite3` (WAL mode, indexed on type, agent_id, parent_event_id). One DB per agent at `~/.cadmus/agents/<name>/.cadmus/timeline.db`. The timeline is also a pub/sub — the runtime subscribes and dispatches events to matching processors as they land.
+SQLite via `better-sqlite3` (WAL mode, indexed on type/agent_id/session_id/source/parent_event_id). One DB per agent at `~/.cadmus/agents/<name>/.cadmus/timeline.db`. The timeline is also a pub/sub — the runtime subscribes and dispatches events to matching processors as they land.
 
 ### Wiring is checked at boot
 
 The runtime warns if a processor filters on an event type that nothing emits. Lets you catch broken pipelines before a user is waiting.
 
-### Tools
+### The spec
 
-Tools are plain async functions with a JSON-schema input. A tool def looks like:
+The four core primitives are formally documented in `spec/`. Implementations get conformance harnesses (`assertTimelineConforms`, `assertMemoryStoreConforms`, `assertChannelConforms`) — if a third-party backend or channel passes the harness, it's interoperable with the rest of the ecosystem.
 
-```ts
-const calculate = defineTool({
-  name: "calculate",
-  description: "Evaluate an arithmetic expression.",
-  input_schema: {
-    type: "object",
-    properties: { expression: { type: "string" } },
-    required: ["expression"],
-  },
-  handler: async (args) => {
-    /* ... */
-  },
-});
-```
-
-A processor declares which tools it can call by listing their names in `tools: [...]`. The framework injects them into the model's tool list. When the model tool-calls, the framework runs the handler and sends the result back. Tool calls produce `tool_called` and `tool_result` events on the timeline so everything is observable.
+- [spec/glossary.md](spec/glossary.md) — vocabulary, naming rules
+- [spec/events-v1.md](spec/events-v1.md) — envelope + 9 stable event types
+- [spec/timeline.md](spec/timeline.md), [spec/processor.md](spec/processor.md), [spec/tool.md](spec/tool.md), [spec/channel.md](spec/channel.md), [spec/memory.md](spec/memory.md)
 
 ---
 
 ## Built-in tools (`@cadmus/tools`)
 
-Cadmus ships a tools package with batteries included. Agents opt in by listing the tools they want — same shape as iPhone's built-in apps. Each tool is a small TypeScript file; the contribution surface is wide open.
-
 | Subpath | Tools | What |
 |---|---|---|
-| `@cadmus/tools/memory` | `memory_search`, `memory_write`, `memory_list` | JSON-backed persistent store. Survives restarts. |
+| `@cadmus/tools/memory` | `memory_search`, `memory_write`, `memory_delete` | SQLite + canonical three-kind taxonomy (procedural / semantic / episodic). |
 | `@cadmus/tools/web` | `web_search`, `web_fetch` | DuckDuckGo by default; Brave with `BRAVE_SEARCH_API_KEY`. |
 | `@cadmus/tools/fs` | `read_file`, `write_file`, `list_dir` | Sandboxed to `process.cwd()` by default. |
 | `@cadmus/tools/shell` | `bash` | Disabled by default — opt in with `{ enabled: true }`. Timeouts + allowlist. |
@@ -114,99 +194,40 @@ Cadmus ships a tools package with batteries included. Agents opt in by listing t
 
 ```ts
 import { defineAgent, defineProcessor } from "@cadmus/kernel";
-import { webSearch, webFetch } from "@cadmus/tools/web";
-import { createMemoryStore } from "@cadmus/tools/memory";
+import { createMemory } from "@cadmus/tools/memory";
+import { getCurrentTime } from "@cadmus/tools/time";
 
-const memory = createMemoryStore();
-// ... mount memory.memorySearch / memoryWrite / memoryList in agent tools
+const memory = createMemory({ path: ".cadmus/memory.db" });
+
+export default defineAgent({
+  agentId: "my-agent",
+  name: "My Agent",
+  tools: {
+    ...memory.tools,                  // memory_search, memory_write, memory_delete
+    get_current_time: getCurrentTime,
+  },
+  // ... processors
+});
 ```
-
----
-
-## Three contribution surfaces
-
-Cadmus has three orthogonal extension points. Most contributions land in one of these three places:
-
-**Tools** (`@cadmus/tools`) — functions models call. Memory, web, fs, shell, time, MCP, and whatever you need to add (calendar, email, http, GitHub, Notion, etc.). Each tool is one file.
-
-**Processors** (`@cadmus/processors`, *coming soon*) — units that subscribe to events and emit events. Reusable patterns: agent-health vitals (token tracking, cost ceilings), auto-compaction, schedulers, code-review gates, eval harnesses. A code processor is ~30 lines.
-
-**Channels** (`@cadmus/channels`, *coming soon*) — adapters that bring external messages onto the timeline. Telegram, WhatsApp, Slack, Discord, iMessage, terminal, webhook. Each channel is a long-running process that authenticates once and streams.
-
-If you want to contribute, start with a tool. They're the smallest reviewable PR.
 
 ---
 
 ## Server endpoints
 
-The kernel exposes a small HTTP API on port `4000` (configurable via `CADMUS_PORT`). Studio uses it; you can call it from anything.
+The kernel exposes a small HTTP API on port `4000` (override via `CADMUS_PORT`). Studio uses it; you can call it from anything.
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/agent` | Agent metadata: id, name, processors (with system prompts and schemas), tools. |
-| `GET /api/status` | Provider config health: which providers are needed, which are configured. Powers Studio's setup wizard. |
-| `GET /api/workspace` | List of agents installed in `~/.cadmus/agents/` + which is active. |
+| `GET /api/status` | Provider config health. Powers Studio's setup wizard. |
+| `GET /api/workspace` | List of agents in `~/.cadmus/agents/` + which is active. |
 | `POST /api/workspace/active-agent` | Set the active agent. `{ name }`. |
 | `GET /api/events` | Timeline events since a given seq. Query: `?since=<seq>&limit=<n>`. |
 | `GET /api/events/all` | Full timeline. |
 | `GET /api/stream` | SSE stream — every new event as it lands. |
-| `POST /api/inject` | Inject an event. `{ text }` for `user_input`, or `{ type, data }` for any event type. |
+| `POST /api/inject` | Inject an event. `{ text, channel?, kind? }` for an `input` event, or `{ type, data }` for any event type. |
 
-CORS is permissive. Use it to build dashboards, eval pipelines, or your own UIs.
-
----
-
-## The two agents
-
-### Cadmus — the brain pipeline
-
-```
-user_input ─┐
-tool_result ┼─▶ hippocampus (llm) ─▶ memory_retrieved
-            │
-            ▼
-        thalamus (llm) ─▶ working_memory_updated
-            │
-            ▼
-          pfc (llm) ─▶ pfc_response
-            │
-            ▼
-        executor (code) ─▶ tool_called → tool_result OR agent_message
-```
-
-- **hippocampus** — small/fast model. Reads the trigger event + recent timeline. Calls `memory_search` 1–3 times with targeted queries. Emits `memory_retrieved` with merged results.
-- **thalamus** — small/fast model. Compresses the conversation, picks the 2–5 most relevant memories, surfaces recent tool results. Emits `working_memory_updated` — a single tight snapshot the PFC will see.
-- **pfc** — the conscious reasoner. Carries the Cadmus mythology persona. Reads only the working memory. Decides on tool calls and the response.
-- **executor** — code processor (no LLM). Runs the PFC's tool calls, emits `tool_called`/`tool_result`. If the PFC produced a `response_to_user`, emits `agent_message`.
-
-Tools available: `memory_search`, `memory_write` (hippocampus), `calculate`, `get_current_time` (PFC).
-
-Memory is in-memory in this example (cleared on restart). Replace with a vector store or Postgres-backed implementation by swapping the tool's handler — the rest of the pipeline doesn't change.
-
-### Claudius — the boring loop
-
-```
-user_input ─────────┐
-tool_result ────────┤
-session_started ────┼─▶ pfc (llm + tools) ─▶ agent_message
-conversation_       │       │
-compacted ──────────┘       └─▶ tool_called → tool_result ─▶ pfc loops
-```
-
-A single PFC processor. Whatever fits in the context window IS the working memory. Closer to a Claude-style chat assistant.
-
-**Session boundaries** — Claudius honors two events:
-- `session_started` — model "forgets" prior turns. Like `/clear` in Claude Code.
-- `conversation_compacted` — collapses earlier context into a summary in `data.summary`. Like Claude's automatic compaction.
-
-The PFC's `sessionEvents` config makes the framework only show events at or after the most recent boundary. Inject either event from the timeline drawer or via `POST /api/inject`.
-
-**Persistent memory** — `.cadmus/memories.json` beside the timeline DB, survives kernel restarts. Three tools:
-- `memory_search` — free-text query.
-- `memory_write` — save a new memory.
-- `memory_list` — N most recent. Useful at session start.
-
-Other tools: `calculate`, `get_current_time`.
+CORS is permissive. Build dashboards, eval pipelines, or your own UIs.
 
 ---
 
@@ -235,42 +256,14 @@ Other
   cadmus help               Show this help
 ```
 
-`cadmus add my-agent` scaffolds a fresh agent under `~/.cadmus/agents/my-agent/` with a starter `cadmus.config.ts`. Multi-agent works out of the box: install as many as you want, switch with `cadmus use`.
-
 ### Sharing agents
 
 ```bash
 cadmus export my-agent              # → ./my-agent.cadmus.json
-# send the file to a friend, or commit it to a repo
-cadmus import their-agent.cadmus.json
 cadmus import their-agent.cadmus.json --as their-renamed
 ```
 
-Exports include the agent's `cadmus.config.ts`, README, and persistent memories. Add `--with-timeline` to include the event log too. Imports drop the agent into `~/.cadmus/agents/<name>/` and make it active.
-
----
-
-## Build a custom processor
-
-The minimum viable processor — a code processor that watches every `agent_message` and counts tokens — is about 20 lines:
-
-```ts
-import { defineProcessor } from "@cadmus/kernel";
-
-export default defineProcessor({
-  name: "token_counter",
-  template: "code",
-  filter: ["agent_message"],
-  outputEvents: ["token_count"],
-  handler: async (event, ctx) => {
-    const text = (event.data as { text?: string }).text ?? "";
-    const tokens = text.split(/\s+/).length; // rough
-    await ctx.emit("token_count", { tokens });
-  },
-});
-```
-
-Add it to your agent's `processors: [...]` array. The framework dispatches events automatically — no router, no glue code.
+Exports include the agent's `cadmus.config.ts`, README, and persistent memories. Add `--with-timeline` to include the event log too.
 
 ---
 
@@ -278,10 +271,11 @@ Add it to your agent's `processors: [...]` array. The framework dispatches event
 
 ```
 cadmus/
+├── spec/             v1 specs — vocabulary, event envelope, processor / tool / channel / memory / timeline contracts
 ├── packages/
-│   ├── kernel/       @cadmus/kernel  — runtime, timeline, providers, server
-│   ├── tools/        @cadmus/tools   — built-in tools (memory, web, fs, shell, time, mcp)
-│   └── cli/          @cadmus/cli     — `cadmus start/stop/setup/list/use/add/...`
+│   ├── kernel/       @cadmus/kernel  — runtime, timeline, providers, server, channels, conformance
+│   ├── tools/        @cadmus/tools   — memory, web, fs, shell, time, mcp
+│   └── cli/          @cadmus/cli     — `cadmus start / stop / setup / list / use / add / ...`
 ├── apps/
 │   └── studio/       Local UI: agent sidebar + brain canvas + chat + timeline
 ├── examples/
@@ -292,37 +286,28 @@ cadmus/
 
 ---
 
-## Why this shape
-
-- **The brain pattern is one configuration, not the framework.** Build any topology by composing processors.
-- **Code and LLM mix freely.** Use `llm` where reasoning matters, `code` where determinism does.
-- **Everything is observable.** Every reasoning step is an event on the timeline. Replay, debug, audit, eval — all reduce to "filter the timeline."
-- **Tools first-class.** Every tool call produces `tool_called` and `tool_result` events. No hidden side effects.
-- **Provider-agnostic.** Gemini and Claude today, more on the way. Swap by changing one model name.
-
----
-
 ## Roadmap
 
-Shipped:
+Shipped (v1):
 - [x] Kernel: timeline, processors, llm/code templates, HTTP+SSE server
 - [x] Provider routing: Google (Gemini) + Anthropic (Claude)
 - [x] CLI: install / start / stop / list / use / add / setup / export / import / uninstall
 - [x] Studio: brain canvas, chat, processor inspector, agent sidebar
-- [x] `@cadmus/tools` package: memory, web, fs, shell, time, mcp stubs
-- [x] Two example agents: Cadmus (brain pipeline) + Claudius (Claude-style)
+- [x] `@cadmus/tools`: memory (SQLite, 3 canonical kinds), web, fs, shell, time, mcp stubs
+- [x] `Channel` primitive + built-in CLI / Studio channels
+- [x] `MemoryStore` contract with portable record shape (cross-backend export/import)
+- [x] Source attribution on every event + source-constrained filters
+- [x] Conformance harnesses for Timeline, MemoryStore, Channel
 
-Next big chunks (contributors welcome):
-- [ ] **MCP client** — wire up the three `mcp_*` meta-tools to a real MCP client. Currently stubs.
-- [ ] **More providers** — OpenAI, Ollama, Groq, xAI. Each is ~80 lines.
-- [ ] **More built-in tools** — calendar, email, http, github, notion. Each is ~50 lines.
-- [ ] **`@cadmus/processors`** — vitals (token tracking + cost limits), auto-compaction, schedulers, code-review gates.
-- [ ] **`@cadmus/channels`** — Telegram, WhatsApp, Slack, Discord. Each is its own long-running process.
-- [ ] **Edit-in-UI** — change a processor's prompt or model from Studio with hot-reload.
-- [ ] **Vector memory backend** — sqlite-vec, pgvector, Pinecone wrappers.
-- [ ] **Timeline replay on import** — currently `cadmus import` drops the events.
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for "good first issue"–scale tasks in each category.
+Next big chunks (contributors welcome — see open issues):
+- [ ] **Real MCP client** — wire the three `mcp_*` meta-tools to an actual MCP client
+- [ ] **More providers** — OpenAI, Ollama, Groq, xAI (~80 lines each)
+- [ ] **`@cadmus/channels`** — Telegram, Slack, Discord, email
+- [ ] **`@cadmus/processors`** — vitals (token/cost tracking), auto-compaction summarizer, schedulers
+- [ ] **More built-in tools** — calendar, GitHub, Notion, http (~50 lines each)
+- [ ] **Vector memory backend** — sqlite-vec, pgvector, Pinecone
+- [ ] **Studio editing** — change a processor's prompt or model from the UI with hot-reload
+- [ ] **Timeline replay on import** — currently `cadmus import` drops events
 
 ## License
 
