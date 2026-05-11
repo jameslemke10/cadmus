@@ -18,8 +18,6 @@ That sounds abstract, but the punchline is concrete: **agents stop being black-b
 
 ## What's in the box
 
-The kernel ships with batteries for the things every agent needs, then gets out of your way:
-
 - **Tools** — built-in `memory_search` / `memory_write` / `memory_delete`, `web_search` / `web_fetch`, `bash` (opt-in), filesystem, time, and an MCP bridge. Write your own — a tool is a name + JSON-Schema input + async handler.
 - **Channels** — the bridge between an external system (your terminal, the Studio UI, eventually Slack/Telegram/voice) and the timeline. Channels emit `input` events and route `output` events back. The CLI channel and Studio channel are built in.
 - **Memory** — SQLite-backed by default, with three canonical kinds: `procedural` (skills), `semantic` (facts), `episodic` (events). Backend is pluggable; backends are interchangeable because every memory write hits the timeline and replay rebuilds the store.
@@ -33,7 +31,7 @@ But that's just the foundation. **Cadmus is a playground.** Define your own even
 # Install
 curl -fsSL https://raw.githubusercontent.com/jameslemke10/cadmus/main/install.sh | bash
 
-# Drop in your API key (free Gemini key recommended)
+# Drop in your API key
 cadmus setup
 
 # Boot the active agent + Studio UI
