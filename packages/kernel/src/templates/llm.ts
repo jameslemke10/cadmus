@@ -140,16 +140,37 @@ export async function runLLMTemplate(
     }
 
     toolResults = [];
+    // Dedupe emit_<type> within a single turn: if the model batches three
+    // calls to emit_working_memory_updated (Gemini sometimes does this),
+    // only the first one actually emits — the rest get acknowledged with
+    // a "skipped" tool result so the model can self-correct.
+    const emittedTypesThisTurn = new Set<string>();
+    let emittedThisTurn = 0;
+
     for (const tc of turn.toolCalls) {
       try {
         if (tc.name.startsWith("emit_")) {
           const eventType = tc.name.slice("emit_".length);
+
+          if (emittedTypesThisTurn.has(eventType)) {
+            ctx.log(`(${proc.name}) duplicate emit_${eventType} in same turn — skipping`);
+            toolResults.push({
+              id: tc.id,
+              name: tc.name,
+              content: `skipped: already emitted ${eventType} this turn`,
+              isError: true,
+            });
+            continue;
+          }
+          emittedTypesThisTurn.add(eventType);
+
           const data =
             tc.input && typeof tc.input === "object" && "data" in tc.input && Object.keys(tc.input).length === 1
               ? (tc.input.data as Record<string, unknown>)
               : tc.input;
           const emitted = await ctx.emit(eventType, data ?? {});
           totalEmissions++;
+          emittedThisTurn++;
           toolResults.push({
             id: tc.id,
             name: tc.name,
@@ -182,9 +203,18 @@ export async function runLLMTemplate(
         });
       }
     }
+
+    // "Emit then stop" — terminate the iteration loop after any turn that
+    // produced an emit. Real tool calls (memory_search, web_fetch, etc.)
+    // continue iterating; only output emissions end the loop. This caps
+    // each processor invocation to a single emission of each output type
+    // and prevents Gemini from looping on emit_<type> indefinitely.
+    if (emittedThisTurn > 0) {
+      return;
+    }
   }
 
-  ctx.log(`(${proc.name}) hit maxIterations (${maxIterations}) without stopping`);
+  ctx.log(`(${proc.name}) hit maxIterations (${maxIterations}) without emitting`);
 }
 
 /**

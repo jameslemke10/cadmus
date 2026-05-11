@@ -95,9 +95,12 @@ echo "  Installing to: $CADMUS_HOME"
 echo
 
 # 1. Clone or update the framework into ~/.cadmus/cli/
+#    Update path is fast — shallow fetch + reset --hard. The previous
+#    fetch+checkout+pull combo was slow on shallow clones because git
+#    had to negotiate history that didn't exist.
 if [ -d "$CLI_DIR/.git" ]; then
   spin "Updating framework" \
-    bash -c "git -C '$CLI_DIR' fetch --quiet origin '$CADMUS_REF' && git -C '$CLI_DIR' checkout --quiet '$CADMUS_REF' && git -C '$CLI_DIR' pull --quiet --ff-only origin '$CADMUS_REF'"
+    bash -c "git -C '$CLI_DIR' fetch --quiet --depth=1 origin '$CADMUS_REF' && git -C '$CLI_DIR' reset --hard --quiet 'origin/$CADMUS_REF'"
 else
   spin "Cloning framework" \
     git clone --quiet --depth 1 --branch "$CADMUS_REF" "$REPO_URL" "$CLI_DIR"

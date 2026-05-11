@@ -69,7 +69,7 @@ export function AgentSidebar({ api, currentAgentName, onSwitchRequest }: Props) 
   if (!workspace || workspace.agents.length === 0) return null;
 
   return (
-    <aside className="w-[200px] bg-stone-50 border-r border-stone-200 flex flex-col">
+    <aside className="w-full h-full bg-stone-50 border-r border-stone-200 flex flex-col overflow-hidden">
       <header className="px-3 py-2.5 border-b border-stone-200">
         <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold">
           agents
