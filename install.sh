@@ -22,6 +22,50 @@ yellow() { printf "\033[33m%b\033[0m" "$1"; }
 red()    { printf "\033[31m%b\033[0m" "$1"; }
 dim()    { printf "\033[2m%b\033[0m" "$1"; }
 
+# spin <message> -- <command...>
+# Runs the command in the background and shows a single-line spinner with
+# elapsed seconds. On success replaces the spinner with a green check + time;
+# on failure prints the tail of the captured log and exits.
+spin() {
+  local msg="$1"
+  shift
+  local logfile
+  logfile="$(mktemp -t cadmus-install.XXXXXX)"
+  ("$@" >"$logfile" 2>&1) &
+  local pid=$!
+  local chars='|/-\'
+  local i=0
+  local start_ts
+  start_ts="$(date +%s)"
+  # Hide cursor while spinning.
+  printf '\033[?25l'
+  while kill -0 "$pid" 2>/dev/null; do
+    local elapsed=$(($(date +%s) - start_ts))
+    printf '\r  %s %s \033[2m(%ds)\033[0m\033[K' \
+      "${chars:$((i % 4)):1}" "$msg" "$elapsed"
+    i=$((i + 1))
+    sleep 0.1
+  done
+  # Restore cursor.
+  printf '\033[?25h'
+  wait "$pid"
+  local code=$?
+  local total=$(($(date +%s) - start_ts))
+  if [ "$code" -eq 0 ]; then
+    printf '\r  \033[32m✓\033[0m %s \033[2m(%ds)\033[0m\033[K\n' \
+      "$msg" "$total"
+    rm -f "$logfile"
+  else
+    printf '\r  \033[31m✗\033[0m %s \033[2m(failed after %ds)\033[0m\033[K\n\n' \
+      "$msg" "$total"
+    echo '  --- last 30 lines of output ---'
+    tail -30 "$logfile" >&2
+    echo
+    echo "  full log: $logfile"
+    exit "$code"
+  fi
+}
+
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
     red "✗ $1 not found.\n"
@@ -52,22 +96,20 @@ echo
 
 # 1. Clone or update the framework into ~/.cadmus/cli/
 if [ -d "$CLI_DIR/.git" ]; then
-  echo "  → Updating framework…"
-  git -C "$CLI_DIR" fetch --quiet origin "$CADMUS_REF"
-  git -C "$CLI_DIR" checkout --quiet "$CADMUS_REF"
-  git -C "$CLI_DIR" pull --quiet --ff-only origin "$CADMUS_REF"
+  spin "Updating framework" \
+    bash -c "git -C '$CLI_DIR' fetch --quiet origin '$CADMUS_REF' && git -C '$CLI_DIR' checkout --quiet '$CADMUS_REF' && git -C '$CLI_DIR' pull --quiet --ff-only origin '$CADMUS_REF'"
 else
-  echo "  → Cloning framework…"
-  git clone --quiet --depth 1 --branch "$CADMUS_REF" "$REPO_URL" "$CLI_DIR"
+  spin "Cloning framework" \
+    git clone --quiet --depth 1 --branch "$CADMUS_REF" "$REPO_URL" "$CLI_DIR"
 fi
 
 cd "$CLI_DIR"
 
-echo "  → Installing dependencies…"
-npm install --silent --no-fund --no-audit
+spin "Installing dependencies (first run takes ~30s)" \
+  npm install --silent --no-fund --no-audit
 
-echo "  → Building kernel and CLI…"
-npm run build --silent
+spin "Building kernel, tools, and CLI" \
+  npm run build --silent
 
 # 2. Seed default agents under ~/.cadmus/agents/ (if not already present).
 mkdir -p "$AGENTS_DIR"
@@ -85,10 +127,8 @@ seed_agent() {
     return
   fi
   mkdir -p "$target_dir"
-  # Copy the agent's config + readme + env example.
   cp "$example_dir/cadmus.config.ts" "$target_dir/cadmus.config.ts"
   [ -f "$example_dir/README.md" ] && cp "$example_dir/README.md" "$target_dir/README.md"
-  # Symlink the framework packages so the agent's imports resolve.
   mkdir -p "$target_dir/node_modules/@cadmus"
   ln -sfn "$CLI_DIR/packages/kernel" "$target_dir/node_modules/@cadmus/kernel"
   if [ -d "$CLI_DIR/packages/tools" ]; then
@@ -112,7 +152,6 @@ EOF
 fi
 
 # 4. Link the cadmus command. Prefer dirs already on PATH.
-echo "  → Linking the cadmus command…"
 LINK_TARGET="$CLI_DIR/packages/cli/dist/cli.js"
 chmod +x "$LINK_TARGET"
 
@@ -152,14 +191,12 @@ fi
 echo
 green "✓ Cadmus installed.\n"
 echo
-echo "  $(bold 'Next:') run $(bold 'cadmus setup') to add an API key."
-echo
-echo "  Or just run $(bold 'cadmus start') if you've already set GOOGLE_API_KEY"
-echo "  in your environment."
+echo "  $(bold 'Next:') run $(bold 'cadmus setup') to add an API key,"
+echo "  then $(bold 'cadmus start') to boot the active agent + Studio UI."
 echo
 echo "  Two example agents are ready:"
 echo "    $(bold 'cadmus')    — flagship brain pipeline (hippocampus → thalamus → PFC → executor)"
-echo "    $(bold 'claudius')  — boring single-LLM-call agent for comparison"
+echo "    $(bold 'claudius')  — single-LLM-loop agent (familiar shape)"
 echo
 echo "  Switch between them with $(bold 'cadmus use <name>')."
 echo

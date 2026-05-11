@@ -26,6 +26,7 @@ import {
   readConfig,
   updateConfig,
 } from "./workspace.js";
+import { readSecret, selectFromList } from "./prompts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const templatesDir = resolve(here, "..", "templates");
@@ -269,52 +270,70 @@ function cmdUse(): void {
 }
 
 async function cmdSetup(): Promise<void> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   console.log("");
   console.log(`  ${bold("Cadmus setup")}`);
   console.log(`  ${dim("─".repeat(13))}`);
   console.log("");
 
   const config = readConfig();
-  const existingGoogle = !!config.apiKeys?.GOOGLE_API_KEY;
-  const existingAnthropic = !!config.apiKeys?.ANTHROPIC_API_KEY;
 
-  console.log("  Cadmus needs a model API key.");
-  console.log("    1) Google Gemini  " + dim("(recommended — free tier, no credit card)"));
-  console.log("    2) Anthropic Claude  " + dim("(pay-per-use)"));
-  console.log("    3) Skip  " + dim("(set keys later via cadmus config or env vars)"));
+  console.log("  Cadmus needs an API key for at least one LLM provider.");
   console.log("");
 
-  const choice = (await rl.question("  Which provider? [1] ")).trim() || "1";
+  // Build menu options. Show "(current: …)" when a key is already saved
+  // so re-runs are clear about what they'd overwrite.
+  const googleHint = config.apiKeys?.GOOGLE_API_KEY
+    ? `current: ${maskKey(config.apiKeys.GOOGLE_API_KEY)}`
+    : "aistudio.google.com/apikey";
+  const anthropicHint = config.apiKeys?.ANTHROPIC_API_KEY
+    ? `current: ${maskKey(config.apiKeys.ANTHROPIC_API_KEY)}`
+    : "console.anthropic.com/settings/keys";
+
+  const provider = await selectFromList({
+    prompt: `  ${bold("Which provider?")}`,
+    options: [
+      { label: "Google Gemini", value: "google", hint: googleHint },
+      { label: "Anthropic Claude", value: "anthropic", hint: anthropicHint },
+      { label: "Skip — set keys later (cadmus setup, env vars, or .env.local)", value: "skip" },
+    ],
+    defaultIndex: 0,
+  });
 
   const apiKeys: NonNullable<typeof config.apiKeys> = { ...(config.apiKeys ?? {}) };
 
-  if (choice === "1") {
+  if (provider === "google") {
     console.log("");
-    console.log(`  Get a free key: ${blue("https://aistudio.google.com/apikey")}`);
-    if (existingGoogle) console.log(dim(`  (current key: ${maskKey(config.apiKeys!.GOOGLE_API_KEY!)})`));
-    const key = (await rl.question("  Paste GOOGLE_API_KEY: ")).trim();
+    console.log(`  Get a key: ${blue("https://aistudio.google.com/apikey")}`);
+    const key = (await readSecret("  Paste GOOGLE_API_KEY (hidden): ")).trim();
     if (key) apiKeys.GOOGLE_API_KEY = key;
-  } else if (choice === "2") {
+  } else if (provider === "anthropic") {
     console.log("");
     console.log(`  Get a key: ${blue("https://console.anthropic.com/settings/keys")}`);
-    if (existingAnthropic) console.log(dim(`  (current: ${maskKey(config.apiKeys!.ANTHROPIC_API_KEY!)})`));
-    const key = (await rl.question("  Paste ANTHROPIC_API_KEY: ")).trim();
+    const key = (await readSecret("  Paste ANTHROPIC_API_KEY (hidden): ")).trim();
     if (key) apiKeys.ANTHROPIC_API_KEY = key;
   } else {
     console.log("");
     console.log(yellow("  ⚠ no provider configured."));
-    console.log("    set GOOGLE_API_KEY or ANTHROPIC_API_KEY in your env, or run cadmus setup again.");
+    console.log(
+      "    set GOOGLE_API_KEY / ANTHROPIC_API_KEY in your env (or a .env.local in cwd),",
+    );
+    console.log("    or run cadmus setup again.");
   }
 
   updateConfig({ apiKeys });
   console.log("");
   console.log(green("✓ ") + `saved to ${CONFIG_PATH}`);
 
-  const start = (await rl.question("  Start cadmus now? [Y/n] ")).trim().toLowerCase();
-  rl.close();
+  const start = await selectFromList({
+    prompt: `  ${bold("Start cadmus now?")}`,
+    options: [
+      { label: "Yes — boot kernel + Studio", value: "yes" },
+      { label: "Not yet — just save the key", value: "no" },
+    ],
+    defaultIndex: 0,
+  });
 
-  if (start === "" || start === "y" || start === "yes") {
+  if (start === "yes") {
     console.log("");
     await cmdStart();
   } else {

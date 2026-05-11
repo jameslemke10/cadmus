@@ -48,6 +48,7 @@ export class Timeline implements TimelineStore {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
+    // 1. Create the table with the current schema (no-op if it already exists).
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,13 +62,11 @@ export class Timeline implements TimelineStore {
         parent_event_id TEXT,
         tags TEXT NOT NULL DEFAULT '[]'
       );
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-      CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
-      CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-      CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
-      CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_event_id);
     `);
-    // Migrations: pre-v1 timelines didn't have session_id or source. Try to add them.
+
+    // 2. Migrate older databases: add columns introduced after v1.0. This
+    //    MUST happen before the CREATE INDEX block below, because indexing
+    //    a missing column raises "no such column" and aborts the exec.
     for (const col of ["session_id", "source"]) {
       try {
         this.db.exec(`ALTER TABLE events ADD COLUMN ${col} TEXT`);
@@ -75,6 +74,16 @@ export class Timeline implements TimelineStore {
         // column already exists — fine
       }
     }
+
+    // 3. Indexes — every column is guaranteed to exist by this point.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+      CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+      CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
+      CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_event_id);
+    `);
+
     this.db.pragma("user_version = 1");
   }
 
