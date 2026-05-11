@@ -38,9 +38,16 @@ export interface ToolMeta {
   input_schema: Record<string, unknown>;
 }
 
+export interface ChannelMeta {
+  name: string;
+  inboundEvents: string[];
+  outboundEvents: string[];
+}
+
 export interface AgentMeta {
   id: string;
   name: string;
   processors: ProcessorMeta[];
   tools: ToolMeta[];
+  channels: ChannelMeta[];
 }

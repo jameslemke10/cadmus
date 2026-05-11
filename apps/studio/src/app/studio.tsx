@@ -155,25 +155,30 @@ export function Studio() {
         </div>
       )}
 
+      {/*
+        Three panels with a single, stable structure so the resize library
+        doesn't lose its place when the agent finishes loading. autoSaveId
+        is bumped to v2 to drop any stale entries from the broken layout.
+      */}
       <div className="flex-1 overflow-hidden">
-        <PanelGroup
-          direction="horizontal"
-          autoSaveId={agent ? "cadmus-studio-layout-with-sidebar" : "cadmus-studio-layout-no-sidebar"}
-        >
-          {agent && (
-            <>
-              <Panel defaultSize={15} minSize={10} maxSize={30}>
-                <AgentSidebar
-                  api={api}
-                  currentAgentName={agent.id}
-                  onSwitchRequest={() => undefined}
-                />
-              </Panel>
-              <ResizeHandle />
-            </>
-          )}
+        <PanelGroup direction="horizontal" autoSaveId="cadmus-studio-v2">
+          <Panel id="sidebar" order={1} defaultSize={18} minSize={12} maxSize={30}>
+            {agent ? (
+              <AgentSidebar
+                api={api}
+                currentAgentName={agent.id}
+                onSwitchRequest={() => undefined}
+              />
+            ) : (
+              <div className="h-full flex items-center justify-center text-stone-300 text-xs">
+                …
+              </div>
+            )}
+          </Panel>
 
-          <Panel defaultSize={55} minSize={30}>
+          <ResizeHandle />
+
+          <Panel id="canvas" order={2} defaultSize={52} minSize={30}>
             <main className="relative bg-stone-50 h-full">
               {agent ? (
                 <BrainCanvas
@@ -198,7 +203,7 @@ export function Studio() {
 
           <ResizeHandle />
 
-          <Panel defaultSize={30} minSize={20} maxSize={50}>
+          <Panel id="chat" order={3} defaultSize={30} minSize={20} maxSize={50}>
             <aside className="overflow-hidden h-full">
               <ChatPanel
                 api={api}
@@ -225,11 +230,14 @@ export function Studio() {
 }
 
 function ResizeHandle() {
+  // 1px visible line, generous invisible hit area via the library's prop.
+  // No overflowing inner div — that was hijacking pointer events and
+  // making drags resolve to the wrong handle.
   return (
-    <PanelResizeHandle className="group relative w-1 bg-stone-200 hover:bg-stone-400 data-[resize-handle-state=drag]:bg-stone-600 transition-colors cursor-col-resize">
-      {/* Wider hover hit area without changing visual width */}
-      <div className="absolute inset-y-0 -left-1.5 -right-1.5" />
-    </PanelResizeHandle>
+    <PanelResizeHandle
+      hitAreaMargins={{ coarse: 14, fine: 6 }}
+      className="w-px bg-stone-200 hover:bg-stone-400 data-[resize-handle-state=drag]:bg-stone-500 transition-colors"
+    />
   );
 }
 

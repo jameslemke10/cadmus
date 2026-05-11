@@ -169,6 +169,11 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
           description: t.description,
           input_schema: t.input_schema,
         })),
+        channels: runtime.channels.map((c) => ({
+          name: c.name,
+          inboundEvents: c.inboundEvents ?? [],
+          outboundEvents: c.outboundEvents ?? [],
+        })),
       });
     }
 
