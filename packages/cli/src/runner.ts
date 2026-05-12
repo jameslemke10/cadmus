@@ -67,6 +67,20 @@ async function main() {
     process.exit(1);
   }
 
+  // Anchor storage paths to the agent's install directory.
+  // Agent configs use relative paths like `.cadmus/timeline.db` and
+  // `createMemory({ path: ".cadmus/memory.db" })`. SQLite resolves those
+  // against cwd, so launching `cadmus start` from a random shell location
+  // stranded the timeline + memory DBs in that shell's cwd — outside
+  // ~/.cadmus/, invisible to `cadmus uninstall`, and silently re-attached
+  // by the next install. Setting CADMUS_AGENT_DIR here lets the kernel
+  // (timeline) and tools (memory) resolve relative storage paths against
+  // the agent dir while leaving cwd alone for fs/shell tools.
+  const configDir = dirname(resolve(configPath));
+  if (!process.env.CADMUS_AGENT_DIR) {
+    process.env.CADMUS_AGENT_DIR = configDir;
+  }
+
   // Eagerly load .env.local if present.
   await loadDotEnv();
 

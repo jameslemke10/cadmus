@@ -1,3 +1,4 @@
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { eventId } from "./id.js";
 import { runLLMCallTemplate } from "./templates/llm_call.js";
 import { runLLMLoopTemplate } from "./templates/llm_loop.js";
@@ -17,6 +18,20 @@ import {
 } from "./types.js";
 
 const DEFAULT_TIMELINE_PATH = ".cadmus/timeline.db";
+
+/**
+ * Resolve a storage path. Absolute paths and `:memory:` pass through; a
+ * relative path is anchored to CADMUS_AGENT_DIR if set (CLI runner exports
+ * it, pointing at the agent's install dir), otherwise to cwd. This is what
+ * keeps the timeline DB inside the agent's directory regardless of where
+ * the user launched `cadmus start` from — so uninstall / export / import
+ * actually carry the data.
+ */
+function resolveStoragePath(p: string): string {
+  if (p === ":memory:" || isAbsolute(p)) return p;
+  const base = process.env.CADMUS_AGENT_DIR ?? process.cwd();
+  return resolvePath(base, p);
+}
 
 /** Event types the runtime itself emits — used by validateWiring to suppress false-positive warnings. */
 const FRAMEWORK_EMITTED = new Set<string>([
@@ -53,7 +68,7 @@ export class Runtime {
     this.processors = config.processors;
     this.tools = config.tools ?? {};
     this.channels = config.channels ?? [];
-    this.timeline = new Timeline(config.storage?.timelinePath ?? DEFAULT_TIMELINE_PATH);
+    this.timeline = new Timeline(resolveStoragePath(config.storage?.timelinePath ?? DEFAULT_TIMELINE_PATH));
     this.opts = opts;
 
     this.validate();

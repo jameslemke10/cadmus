@@ -19,7 +19,7 @@
 
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { defineTool, memoryId } from "@cadmus/kernel";
 import type {
   MemoryFilter,
@@ -83,7 +83,14 @@ function rowToRecord(row: Row): MemoryRecord {
 }
 
 export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): MemoryStore {
-  const path = options.path ?? ".cadmus/memory.db";
+  const rawPath = options.path ?? ".cadmus/memory.db";
+  // Anchor relative paths to CADMUS_AGENT_DIR (set by the CLI runner to the
+  // agent's install dir) so the SQLite file lives with the agent rather than
+  // wherever the user happened to launch from. Absolute paths and ":memory:"
+  // pass through unchanged.
+  const path = rawPath === ":memory:" || isAbsolute(rawPath)
+    ? rawPath
+    : resolvePath(process.env.CADMUS_AGENT_DIR ?? process.cwd(), rawPath);
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
   }
