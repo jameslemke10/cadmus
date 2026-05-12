@@ -1,10 +1,10 @@
 # Channel
 
-A bridge between an external system (CLI, Studio, Slack, Telegram, voice, HTTP) and the timeline. Channels emit `input` events from external sources and route `output` events back out. Vocabulary defined in [glossary.md](glossary.md).
+A bridge between an external system (CLI, Studio, voice, HTTP) and the timeline. Channels emit `input` events from external sources and route `output` events back out. Vocabulary defined in [glossary.md](glossary.md).
 
 ## Status
 
-**v1 (draft, greenfield).** No `Channel` primitive exists in the kernel yet. HTTP+SSE is the de-facto transport today (see [packages/kernel/src/server.ts](../packages/kernel/src/server.ts)); event types are de-facto channels. This spec defines the new abstraction. Issue #8 (Telegram) becomes the reference implementation.
+**v1 (draft).** Implemented in [packages/kernel/src/types.ts](../packages/kernel/src/types.ts) and used by the bundled CLI, Studio, and Scheduler channels. External-platform channels (Slack, Discord, etc.) live in separate packages.
 
 ## Channel interface
 
@@ -44,7 +44,7 @@ interface ChannelContext {
 
 ## How a channel works
 
-1. **`start(ctx)`** — the channel connects to its external system (Telegram bot API, Slack socket, IMAP server, etc.).
+1. **`start(ctx)`** — the channel connects to its external system (Slack socket, IMAP server, web socket, etc.).
 2. **Inbound** — when external traffic arrives, the channel calls:
    ```ts
    ctx.emit("input", {
@@ -67,7 +67,7 @@ These are conventional names with documented semantics. Don't redefine them.
 - `app` — programmatic / SDK consumers calling the kernel directly.
 - `system` — synthetic events the kernel itself injects (e.g., scheduler firings). No external destination.
 
-Platform channels use the platform name verbatim: `telegram`, `slack`, `discord`, `whatsapp`, `email`. One per platform.
+Platform channels use the platform name verbatim: `slack`, `discord`, `whatsapp`, `email`. One per platform.
 
 ## Conformance
 
@@ -85,7 +85,7 @@ The runtime supplies an `assertChannelConforms(channel)` test harness (planned) 
 ## Conventions
 
 - **Channels do not interpret.** They translate between an external transport and timeline events. Logic (parsing intent, formatting responses, deciding what to say) belongs in processors.
-- **One channel per external system instance.** A bot watching two Telegram bot tokens is two channels, not one.
+- **One channel per external system instance.** A bot watching two workspace tokens is two channels, not one.
 - **Channels can be inbound-only.** A scheduler channel emits `input` from cron firings but never routes anything out.
 
 ## Reference implementation
@@ -94,7 +94,6 @@ The runtime supplies an `assertChannelConforms(channel)` test harness (planned) 
 
 External channels live in `@cadmus/channels/<name>` packages:
 
-- `@cadmus/channels/telegram` (issue #8 — first reference for the spec)
 - `@cadmus/channels/slack`
 - `@cadmus/channels/discord`
 - `@cadmus/channels/email`
@@ -103,5 +102,5 @@ External channels live in `@cadmus/channels/<name>` packages:
 
 - **Channel-typed events** (`channel_inbound` / `channel_outbound` as event types). Rejected; direction lives in the type name (`input` vs `output`), origin lives in the payload (`data.channel`).
 - **Channel groups / routing rules.** "Send to all Slack channels except DMs" — too speculative; channels handle their own filtering.
-- **Bidirectional persistent threading.** A channel mapping timeline events to specific Telegram threads via `parent_event_id` is implementation-specific in v1. May be standardized later.
+- **Bidirectional persistent threading.** Mapping timeline events back to specific external threads (a Slack thread, an email reply chain) is the channel's concern in v1. May be standardized later.
 - **Channel authentication / authorization.** Per-user identity inside a channel is the channel's concern, not framework-level.

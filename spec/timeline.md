@@ -34,15 +34,14 @@ interface TimelineReader {
 interface TimelineFilter {
   types?: string[];
   agentId?: string;
-  sessionId?: string;
+  source?: string;
 }
 
 interface AppendInput {
   type: string;
   agent_id: string;
   data: Record<string, unknown>;
-  session_id?: string;
-  parent_event_id?: string | null;
+  source?: string | null;
   tags?: string[];
 }
 ```
@@ -60,9 +59,9 @@ Default backend. SQLite in WAL mode: single file, ACID, portable, no daemon. See
 
 Schema requirements:
 
-- `pragma user_version` set to the spec version (currently `1`). Used for migrations.
-- Events table columns match the envelope: `id`, `seq`, `timestamp`, `type`, `agent_id`, `session_id`, `parent_event_id`, `tags` (JSON), `data` (JSON).
-- Indexes: `(type)`, `(agent_id)`, `(session_id)`, `(parent_event_id)`, `(timestamp)`. The `session_id` index is new in v1 — current kernel does not have it; the migration adds it.
+- `pragma user_version` set to the spec version (currently `2`). Used for migrations.
+- Events table columns match the envelope: `id`, `seq`, `timestamp`, `type`, `agent_id`, `source`, `tags` (JSON), `data` (JSON).
+- Indexes: `(type)`, `(agent_id)`, `(source)`.
 
 ## Pluggable backends
 
@@ -90,6 +89,6 @@ Some backends may be append-only (no `forget`). Such backends MUST throw a clear
 
 ## Deferred / not in v1
 
-- **Forking / branching timelines.** The envelope's `parent_event_id` allows DAG traversal in principle, but no first-class fork API exists yet.
-- **Compaction policy.** Per-session retention, archival on `session_ended`, prune-with-receipt — all deferred. Compaction is a processor concern, not a store concern.
-- **Cross-event channel propagation.** A query like "all events for Slack traffic" would need `channel` propagated from `input_received` through the causal chain. Deferred to v2.
+- **Forking / branching timelines.** No first-class fork API. If causal threading lands (a future spec), DAG traversal becomes possible.
+- **Compaction policy.** Retention, archival, prune-with-receipt — all deferred. Compaction is a processor concern, not a store concern.
+- **Causal threading on the envelope.** Dropped from v1; if it returns it'll be in `data` for the events that need it.

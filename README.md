@@ -19,7 +19,7 @@ That sounds abstract, but the punchline is concrete: **agents stop being black-b
 ## What's in the box
 
 - **Tools** — built-in `memory_search` / `memory_write` / `memory_delete`, `web_search` / `web_fetch`, `bash` (opt-in), filesystem, time, and an MCP bridge. Write your own — a tool is a name + JSON-Schema input + async handler.
-- **Channels** — the bridge between an external system (your terminal, the Studio UI, eventually Slack/Telegram/voice) and the timeline. Channels emit `input` events and route `output` events back. The CLI channel and Studio channel are built in.
+- **Channels** — the bridge between an external system (your terminal, the Studio UI, eventually Slack/voice) and the timeline. Channels emit `input` events and route `output` events back. The CLI channel and Studio channel are built in.
 - **Memory** — SQLite-backed by default, with three canonical kinds: `procedural` (skills), `semantic` (facts), `episodic` (events). Backend is pluggable; backends are interchangeable because every memory write hits the timeline and replay rebuilds the store.
 - **Timeline** — typed events with full attribution (you can always see *which* processor emitted *which* event). Append-only, indexed, queryable, durable.
 
@@ -128,7 +128,7 @@ The scaffold is a working single-processor agent with persistent memory. Edit th
 **Contributing back** — three orthogonal surfaces:
 
 - A new tool → `@cadmus/tools` package. Smallest reviewable PR.
-- A new channel (Slack, Telegram, Discord) → conforms to the `Channel` interface in [spec/channel.md](spec/channel.md).
+- A new channel (Slack, Discord) → conforms to the `Channel` interface in [spec/channel.md](spec/channel.md).
 - A new memory backend (Postgres, pgvector, Pinecone) → conforms to `MemoryStore` in [spec/memory.md](spec/memory.md). Runs against `assertMemoryStoreConforms` for free.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for shaped tasks.
@@ -152,7 +152,7 @@ The kernel and Studio talk over HTTP and SSE on `localhost:4000`. Browser opens 
 
 ### Three primitives
 
-1. **Event** — `{ id, seq, timestamp, type, agent_id, session_id, source, parent_event_id, tags, data }`. Append-only. Any string is a valid `type`. The `source` field auto-attributes who emitted it (`processor:<name>` | `channel:<name>` | `tool:<name>` | `kernel`).
+1. **Event** — `{ id, seq, timestamp, type, agent_id, source, tags, data }`. Append-only. Any string is a valid `type`. The `source` field auto-attributes who emitted it (`processor:<name>` | `channel:<name>` | `tool:<name>` | `kernel`).
 2. **Processor** — `{ name, template, filter, outputEvents, tools, templateConfig | handler }`. Subscribes to events via `filter` (bare event types OR `{type, source}` for attribution-aware matches), emits new ones via `outputEvents`.
 3. **Tool** — JSON-schema input + async handler. Processors declare which tools they can call.
 
@@ -163,7 +163,7 @@ The kernel and Studio talk over HTTP and SSE on `localhost:4000`. Browser opens 
 
 ### Storage
 
-SQLite via `better-sqlite3` (WAL mode, indexed on type/agent_id/session_id/source/parent_event_id). One DB per agent at `~/.cadmus/agents/<name>/.cadmus/timeline.db`. The timeline is also a pub/sub — the runtime subscribes and dispatches events to matching processors as they land.
+SQLite via `better-sqlite3` (WAL mode, indexed on type/agent_id/source). One DB per agent at `~/.cadmus/agents/<name>/.cadmus/timeline.db`. The timeline is also a pub/sub — the runtime subscribes and dispatches events to matching processors as they land.
 
 ### Wiring is checked at boot
 
@@ -277,10 +277,30 @@ cadmus/
 ├── apps/
 │   └── studio/       Local UI: agent sidebar + brain canvas + chat + timeline
 ├── examples/
-│   ├── cadmus/       brain pipeline
-│   └── claudius/     Claude-style chat assistant
+│   ├── cadmus/       brain pipeline (three llm_call processors)
+│   ├── claudius/     single-processor llm_call chat — loop over timeline events
+│   └── claud/        single-processor llm_loop chat — loop inside one provider session
 └── install.sh
 ```
+
+---
+
+## Local development
+
+Want to hack on the framework itself or build your own examples without `git push`-ing each iteration? See [CONTRIBUTING.md → Local development](CONTRIBUTING.md#local-development). Short version:
+
+```bash
+# Build dist (or run tsc --watch in another terminal)
+npm run build
+
+# Run an example from your working tree (uses LOCAL kernel, not ~/.cadmus/cli)
+node packages/cli/dist/cli.js dev examples/cadmus/cadmus.config.ts
+
+# Studio in another terminal
+npm run studio:dev
+```
+
+The global `cadmus` command on your PATH points at `~/.cadmus/cli/` (the installer's clone) — useful for verifying `cadmus update` works, but it doesn't see your edits until you push and update. For local dev, always invoke via `node packages/cli/dist/cli.js` (or alias it to something short like `cad`).
 
 ---
 
@@ -300,7 +320,7 @@ Shipped (v1):
 Next big chunks (contributors welcome — see open issues):
 - [ ] **Real MCP client** — wire the three `mcp_*` meta-tools to an actual MCP client
 - [ ] **More providers** — OpenAI, Ollama, Groq, xAI (~80 lines each)
-- [ ] **`@cadmus/channels`** — Telegram, Slack, Discord, email
+- [ ] **`@cadmus/channels`** — Slack, Discord, email
 - [ ] **`@cadmus/processors`** — vitals (token/cost tracking), auto-compaction summarizer, schedulers
 - [ ] **More built-in tools** — calendar, GitHub, Notion, http (~50 lines each)
 - [ ] **Vector memory backend** — sqlite-vec, pgvector, Pinecone

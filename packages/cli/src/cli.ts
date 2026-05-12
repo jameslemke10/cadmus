@@ -443,41 +443,6 @@ async function cmdSetup(): Promise<void> {
     console.log("    or run cadmus setup again.");
   }
 
-  // ── Channel step ────────────────────────────────────────────────
-  // Studio always works out of the box (the runner auto-adds a studio
-  // channel in dev mode), so this step is purely for external channels
-  // like Telegram. Defaults to "Skip" because the most common path is
-  // "just try Studio first."
-
-  console.log("");
-  const telegramHint = apiKeys.TELEGRAM_BOT_TOKEN
-    ? `current: ${maskKey(apiKeys.TELEGRAM_BOT_TOKEN)}`
-    : "t.me/botfather to get a token";
-
-  const channelChoice = await selectFromList({
-    prompt: `  ${bold("Connect an external channel?")}`,
-    options: [
-      { label: "Skip", value: "skip" },
-      { label: "Telegram bot", value: "telegram", hint: telegramHint },
-    ],
-    defaultIndex: 0,
-  });
-
-  if (channelChoice === "telegram") {
-    console.log("");
-    console.log(`  ${bold("Get a bot token from BotFather:")}`);
-    console.log(`    1. Open Telegram (phone, desktop, or ${blue("https://web.telegram.org")})`);
-    console.log(`    2. Search for ${bold("@BotFather")} and start a chat`);
-    console.log(`    3. Send ${bold("/newbot")} and follow the prompts (pick a name, then a username)`);
-    console.log(`    4. BotFather replies with your token — paste it below`);
-    console.log("");
-    const token = (await readSecret("  Paste TELEGRAM_BOT_TOKEN (hidden): ")).trim();
-    if (token) {
-      apiKeys.TELEGRAM_BOT_TOKEN = token;
-      console.log(`  ${dim(`Saved. Switch to the telly agent with: ${bold("cadmus use telly")}`)}`);
-    }
-  }
-
   // ── Tool step ──────────────────────────────────────────────────
   // Optional secrets for built-in tools. Web search works without a key
   // (DuckDuckGo fallback); Brave is a higher-quality upgrade.
@@ -789,7 +754,6 @@ async function cmdUpdate(): Promise<void> {
 }
 
 async function cmdDev(): Promise<void> {
-  // Old-style: explicit config file path. Mostly for headless / CI.
   const configPath = args[1] ? resolve(process.cwd(), args[1]) : null;
   if (!configPath || !existsSync(configPath)) die("usage: cadmus dev <path/to/cadmus.config.ts>");
   const port = Number(process.env.CADMUS_PORT ?? "4000");

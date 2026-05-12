@@ -153,7 +153,7 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
           tools: p.tools ?? [],
           inputSchema: p.inputSchema,
           outputSchema: p.outputSchema,
-          templateConfig: p.template === "llm"
+          templateConfig: p.template.startsWith("llm")
             ? {
                 model: p.templateConfig?.model,
                 systemPrompt: p.templateConfig?.systemPrompt,

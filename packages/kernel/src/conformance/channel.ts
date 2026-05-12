@@ -93,10 +93,8 @@ export async function assertChannelLifecycle(channel: Channel): Promise<CadmusEv
         timestamp: new Date().toISOString(),
         type,
         agent_id: "conformance-test-agent",
-        session_id: null,
         source: `channel:${channel.name}`,
         data,
-        parent_event_id: null,
         tags: [],
       };
       emitted.push(event);

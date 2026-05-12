@@ -1,8 +1,7 @@
 /**
  * Cadmus — the brain agent.
  *
- * Three processors, with the loop made of events (not an inner loop hidden
- * inside one processor):
+ * Three llm_call processors, with the loop made of events:
  *
  *   input ──► hippocampus ──► thalamus ──► pfc ──► output
  *                  ▲                        │
@@ -18,14 +17,17 @@
  *   on the next cycle, so memory retrieval can react to what the PFC just
  *   discovered.
  *
- * Every processor invocation is a single LLM turn. The model does not
- * see its own tool results within the same turn — they appear in the
- * next invocation's context dump. The loop is observable on the timeline:
- * every tool call, retrieval, compression, and routing decision is an
- * event you can scrub through.
+ * Every processor invocation is a SINGLE LLM turn (template: "llm_call").
+ * The model does not see its own tool results within the same turn — they
+ * appear in the next invocation's context dump. The loop is observable on
+ * the timeline: every tool call, retrieval, compression, and routing
+ * decision is an event you can scrub through.
  *
- * For an even simpler single-processor agent, see ../claudius.
- * For a Telegram-connected agent, see ../telly.
+ * For the same conversational behavior in two different shapes:
+ *   - examples/claud      — single processor, llm_loop (the LLM SDK loops
+ *                           on tool results internally).
+ *   - examples/claudius   — single processor, llm_call (loop is made of
+ *                           input/tool_result events on the timeline).
  */
 
 import { defineAgent, defineProcessor } from "@cadmus/kernel";
@@ -47,8 +49,15 @@ export default defineAgent({
     // so memory retrieval can adapt to whatever the PFC just learned.
     defineProcessor({
       name: "hippocampus",
-      template: "llm",
-      filter: ["input", "pfc_loop"],
+      template: "llm_call",
+      filter: [
+        "input",
+        "pfc_loop",
+        // Re-trigger on our own memory_search result so we can emit
+        // memory_retrieved in a follow-up turn — many models won't emit
+        // a summary event in the same turn they kicked off a search.
+        { type: "tool_result", source: "processor:hippocampus" },
+      ],
       tools: ["memory_search"],
       outputEvents: ["memory_retrieved"],
       outputSchema: {
@@ -79,11 +88,17 @@ export default defineAgent({
         contextEvents: 50,
         systemPrompt: `You are the HIPPOCAMPUS of a Cadmus agent.
 
-Your job: given the recent timeline (including the user's latest input and any tool calls the PFC just made), formulate 1-3 targeted memory_search queries, run them, then emit ONE memory_retrieved event summarizing what you found.
+Your job: given the recent timeline, retrieve the most relevant memories, then emit ONE memory_retrieved event summarizing what you found.
 
-This invocation is a single turn. Call memory_search 1-3 times in this turn (you may filter by kind: "procedural" / "semantic" / "episodic"), then call emit_memory_retrieved EXACTLY ONCE with { queries: [...], results: [...] } containing the merged, deduplicated, ranked results. Then stop.
+You operate in two phases, both single LLM turns:
 
-You do not see the memory_search results within this turn — the next downstream processor (thalamus) sees them in its own context dump. Just issue queries that you believe will pull the most relevant memories for whatever is happening in the timeline.`,
+Phase A — TRIGGERED BY: a fresh "input" or "pfc_loop" event.
+  In this turn, call memory_search 1-3 times (you may filter by kind: "procedural" / "semantic" / "episodic"). Do NOT call emit_memory_retrieved in this turn — you don't know the search results yet. Just issue searches and stop.
+
+Phase B — TRIGGERED BY: a "tool_result" event from your own memory_search call.
+  The recent timeline now contains your tool_result events with the raw memory hits. Call emit_memory_retrieved EXACTLY ONCE with { queries: [...the queries you ran], results: [...merged, deduplicated, ranked hits] }, then stop.
+
+To know which phase you're in: look at the trigger event's type. If it's "input" or "pfc_loop" → Phase A. If it's "tool_result" with tool: "memory_search" → Phase B.`,
       },
     }),
 
@@ -91,7 +106,7 @@ You do not see the memory_search results within this turn — the next downstrea
     // snapshot the PFC will act on.
     defineProcessor({
       name: "thalamus",
-      template: "llm",
+      template: "llm_call",
       filter: [{ type: "memory_retrieved", source: "processor:hippocampus" }],
       outputEvents: ["working_memory_updated"],
       outputSchema: {
@@ -125,7 +140,7 @@ Call emit_working_memory_updated EXACTLY ONCE with { conversation_history, curre
     // `output` (final answer; exits the cycle) or `pfc_loop` (cycle again).
     defineProcessor({
       name: "pfc",
-      template: "llm",
+      template: "llm_call",
       filter: [{ type: "working_memory_updated", source: "processor:thalamus" }],
       tools: ["web_search", "web_fetch", "memory_write"],
       outputEvents: ["output", "pfc_loop"],

@@ -20,26 +20,75 @@ Plus three more:
 | **Examples** (`examples/<name>/`) | A whole agent configuration with its own personality and tools. The smallest reviewable PR. |
 | **Studio** (`apps/studio/`) | UI improvements — edit-in-UI, hot-reload, better timeline visualizations. |
 
-## Get the dev loop running
+## Local development
+
+After `npm install` from a fresh clone, you have two `cadmus` commands on your machine. They never collide if you keep them straight:
+
+| Command | Source | Use when |
+|---|---|---|
+| `node packages/cli/dist/cli.js <cmd>` (this repo) | Your working tree | **Local dev — testing your edits.** |
+| `cadmus <cmd>` (the global on PATH, after `install.sh`) | `~/.cadmus/cli/` (clone of GitHub `main`) | **Verifying `cadmus update` works.** Don't use during dev — it doesn't see your edits until you push and update. |
+
+Recommended shell alias to make local invocations short:
 
 ```bash
-git clone https://github.com/jameslemke10/cadmus
-cd cadmus
+# in ~/.zshrc
+alias cad='node ~/Documents/cadmus/packages/cli/dist/cli.js'
+```
+
+### Edit-test loop
+
+```bash
+# Once: install + build
 npm install
-npm run build           # builds @cadmus/kernel + @cadmus/tools + @cadmus/cli
+npm run build
 
-# Test against the brain example
-cp .env.example examples/cadmus/.env.local   # paste your GOOGLE_API_KEY
-node packages/cli/dist/cli.js dev examples/cadmus/cadmus.config.ts
+# Provide an API key for the example
+cp .env.example examples/cadmus/.env.local   # paste your GOOGLE_API_KEY (or ANTHROPIC_API_KEY)
+
+# Terminal 1 — keep TypeScript compiling on save:
+npx tsc -b packages/kernel packages/tools packages/cli --watch
+
+# Terminal 2 — run an example from your working tree:
+cad dev examples/cadmus/cadmus.config.ts
+# (Ctrl+C and re-run with a different path to switch agents.)
+
+# Terminal 3 — Studio (Next.js, hot-reloads on save):
+npm run studio:dev
 ```
 
-Then in another terminal:
+Open `http://localhost:3001`. The Studio sidebar lists sibling dirs of the running config — so `cad dev examples/foo/cadmus.config.ts` shows every `examples/*/cadmus.config.ts` as a sidebar entry. Switching means Ctrl+C and re-running with a different path; there's no click-to-switch.
+
+### What the runner sees
+
+When you run `cad dev examples/foo/cadmus.config.ts` from this repo:
+
+1. `cli.js` spawns `runner.js`.
+2. `runner.js` imports `examples/foo/cadmus.config.ts`.
+3. That config imports `@cadmus/kernel` / `@cadmus/tools`, which resolve via the npm workspace symlinks to `packages/kernel` / `packages/tools`.
+4. So the running agent and its kernel are 100% from your working tree. `~/.cadmus/cli/` is not consulted.
+
+The runner detects "is this config under `~/.cadmus/agents/`?". If yes (production — `cadmus start`), the sidebar uses the global workspace and the `~/.cadmus/config.json` `activeAgent`. If no (local dev), the sidebar is built from the config's sibling directories. See `packages/cli/src/runner.ts`.
+
+### Verifying the install path
+
+After committing local changes:
 
 ```bash
-cd apps/studio && npm run dev
+git push
+cadmus update      # re-runs ~/.cadmus/cli/install.sh, re-clones from main
+cadmus start       # uses the freshly-pulled install
 ```
 
-Open `http://localhost:3001`.
+If `cadmus start` works after this, the install path is healthy.
+
+### Rebuilding installed agents
+
+`~/.cadmus/agents/<name>/cadmus.config.ts` is a copy made by the installer — not a symlink to `examples/`. Editing the example does not update the installed copy. For local dev, prefer `cad dev examples/<name>/cadmus.config.ts` (loads directly from `examples/`); only re-sync the installed copies when verifying `cadmus start`:
+
+```bash
+cp examples/<name>/cadmus.config.ts ~/.cadmus/agents/<name>/
+```
 
 ## Good first issues — concrete tasks
 
@@ -99,8 +148,14 @@ This is the highest-leverage contribution today. Open an issue first if you're g
 ## Architectural rules
 
 - **The framework is generic.** The brain pattern is one example. Don't push hippocampus/thalamus/PFC concepts into the kernel — they belong in `examples/cadmus`.
-- **Provider routing happens in `packages/kernel/src/providers/`.** Detection from the model string lives in `providers/types.ts`.
-- **Events are the only inter-processor communication.** No direct calls, no shared mutable state. If you find yourself wanting that, the answer is probably an event type with a clear schema.
+- **The framework is provider-agnostic.** Adding a new model provider is a new file in `packages/kernel/src/providers/`. Detection from the model string lives in `providers/types.ts`. Don't hard-code Anthropic or Google paths into the template.
+- **Examples are first-class documentation.** When you add a feature to the kernel, demonstrate it in `examples/`.
+- **Events are the only inter-processor communication.** No direct calls, no shared mutable state. If you want that, the answer is probably an event type with a clear schema.
+- **Keep the kernel small.** It's a runtime, not a kitchen sink. New conveniences belong in `@cadmus/tools`, in `examples/`, or in user code — not in `packages/kernel`.
+
+## A note on Next.js (Studio)
+
+The Studio is on **Next.js 16** with breaking changes from earlier versions — APIs, conventions, and file structure may differ from what tutorials and older docs describe. Read the relevant guide in `apps/studio/node_modules/next/dist/docs/` before writing any Next code, and heed deprecation notices.
 
 ## License
 

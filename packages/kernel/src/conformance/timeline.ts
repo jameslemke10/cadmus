@@ -51,15 +51,15 @@ export async function assertTimelineConforms(
     throw new ConformanceError("append() didn't preserve agent_id");
   }
 
-  // ── 3. session_id round-trips
+  // ── 3. source round-trips
   const e2 = await store.append({
     type: "conformance.test",
     agent_id: "test-agent",
-    session_id: "sess-1",
+    source: "channel:test",
     data: { x: 2 },
   });
-  if (e2.session_id !== "sess-1") {
-    throw new ConformanceError("session_id didn't round-trip through append");
+  if (e2.source !== "channel:test") {
+    throw new ConformanceError("source didn't round-trip through append");
   }
 
   // ── 4. seq is monotonically increasing
@@ -93,10 +93,10 @@ export async function assertTimelineConforms(
     throw new ConformanceError("recent() should return events in seq-ascending order");
   }
 
-  // ── 9. recent() honors session_id filter
-  const recentScoped = store.recent(10, { sessionId: "sess-1" });
+  // ── 9. recent() honors source filter
+  const recentScoped = store.recent(10, { source: "channel:test" });
   if (recentScoped.length !== 1 || recentScoped[0].id !== e2.id) {
-    throw new ConformanceError("recent() with sessionId filter returned wrong events");
+    throw new ConformanceError("recent() with source filter returned wrong events");
   }
 
   // ── 10. all() honors type filter
@@ -149,7 +149,7 @@ export async function assertTimelineConforms(
 
   // ── 14. forget(filter) deletes matching events
   const beforeCount = store.count();
-  const removed = await store.forget({ sessionId: "sess-1" });
+  const removed = await store.forget({ source: "channel:test" });
   if (removed === 0) {
     throw new ConformanceError("forget() with matching filter returned 0 deleted");
   }

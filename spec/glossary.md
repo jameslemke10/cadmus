@@ -10,11 +10,11 @@ This document locks the vocabulary used across Cadmus. When in doubt about what 
 
 **Event** — an immutable record on the timeline. Has an envelope (universal metadata) and a payload (`data`). The TypeScript type is `CadmusEvent` (the `Cadmus` prefix avoids shadowing the DOM `Event` global).
 
-**Envelope** — universal metadata on every event: `id`, `seq`, `timestamp`, `type`, `agent_id`, `session_id`, `parent_event_id`, `tags`.
+**Envelope** — universal metadata on every event: `id`, `seq`, `timestamp`, `type`, `agent_id`, `source`, `tags`.
 
 **Payload** — the `data` field of an event. Shape depends on event type.
 
-**Processor** — a unit that subscribes to event types via `filter` and emits new events. Two flavors: `llm` (calls a model, can use tools) and `code` (a TypeScript handler).
+**Processor** — a unit that subscribes to event types via `filter` and emits new events. Three templates: `llm_call` (single provider turn, loops via timeline events), `llm_loop` (multi-turn provider session that loops on tool results internally), and `code` (a TypeScript handler).
 
 **Tool** — a JSON-Schema'd function any processor can declare access to. Has `name`, `description`, `input_schema`, and `handler`.
 
@@ -24,9 +24,9 @@ This document locks the vocabulary used across Cadmus. When in doubt about what 
 
 **Provider** — an LLM provider adapter (Anthropic, Google, OpenAI, Ollama, etc.). Implements a uniform `send()` interface.
 
-**Template** — `llm` or `code`. The execution model a processor uses. The `llm` template handles tool-use loops and synthesizes `emit_<type>` tools.
+**Template** — `llm_call`, `llm_loop`, or `code`. The execution model a processor uses. `llm_call` synthesizes `emit_<type>` tools and runs ONE provider turn per invocation. `llm_loop` runs a multi-turn provider session per invocation, feeding tool results back inline.
 
-**Session** — a logical conversation/run scope. Identified by `session_id` in the envelope. Used for context windowing and memory scoping. **v1 note:** treated as an opaque grouping key; lifecycle, multi-tenant scoping, and concurrency semantics are deferred to a future `spec/session.md`. Don't build production hosting on v1's session model — see [events-v1.md](events-v1.md#session-semantics--minimal-in-v1).
+**Event boundary** — an `event_boundary` event marks a divider in the stream (typically "new conversation"). The LLM templates scope their context window to events at-or-after the most recent boundary.
 
 **Conformance test** — an importable test suite that verifies a third-party implementation (provider, channel, memory backend) satisfies the spec it claims to.
 
@@ -34,7 +34,7 @@ This document locks the vocabulary used across Cadmus. When in doubt about what 
 
 Every event on the timeline falls into one of two tiers:
 
-**Tier 1 — Standard library.** Framework-blessed events with locked shape. Anyone (kernel, processors, tools, channels, memory backends) may emit them; the shape is frozen so implementations across the ecosystem interoperate. Nine events: `input`, `output`, `error`, `tool_call`, `tool_result`, `memory_write`, `memory_delete`, `session_start`, `session_end`.
+**Tier 1 — Standard library.** Framework-blessed events with locked shape. Anyone (kernel, processors, tools, channels, memory backends) may emit them; the shape is frozen so implementations across the ecosystem interoperate. Eight events: `input`, `output`, `error`, `tool_call`, `tool_result`, `memory_write`, `memory_delete`, `event_boundary`.
 
 **Tier 2 — User-defined.** Anything else. Shape is up to the author. Naming convention applies. The brain example's `pfc_response`, `working_memory_updated`, etc. are Tier 2.
 

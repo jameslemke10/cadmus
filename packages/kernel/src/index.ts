@@ -4,17 +4,14 @@
  * Concepts:
  *   - Timeline: an append-only log of typed events. The agent's lived experience.
  *   - Processor: a unit that subscribes to event types and emits new events.
- *     Templates: `llm` (calls an LLM, can use tools, emits via synthesized
- *     emit_<type> tools) and `code` (a developer-supplied handler).
+ *     Templates: `llm_call` (one provider turn, emits events), `llm_loop`
+ *     (multi-turn provider session that loops on tool results), and `code`
+ *     (a developer-supplied handler).
  *   - Tools: ordinary callable functions. Any processor can declare which
  *     tools it has access to.
- *   - Channels: bridges between an external system (CLI, Studio, Slack,
- *     etc.) and the timeline. Emit `input`, route `output`.
+ *   - Channels: bridges between an external system (CLI, Studio, etc.) and
+ *     the timeline. Emit `input`, route `output`.
  *   - Memory: a derived index over the timeline. Pluggable backends.
- *
- * The "brain" preset (hippocampus -> thalamus -> PFC -> executor) is one
- * configuration on top of these primitives. The framework knows nothing
- * about brain regions.
  */
 
 export { Timeline } from "./timeline.js";
@@ -24,8 +21,6 @@ export { createCliChannel } from "./channels/cli.js";
 export type { CliChannelOptions } from "./channels/cli.js";
 export { createSchedulerChannel } from "./channels/scheduler.js";
 export type { SchedulerChannelOptions } from "./channels/scheduler.js";
-export { createTelegramChannel } from "./channels/telegram.js";
-export type { TelegramChannelOptions } from "./channels/telegram.js";
 export { createStudioChannel } from "./channels/studio.js";
 export type { StudioChannelOptions } from "./channels/studio.js";
 export { eventMatchesFilter, filterTypes } from "./types.js";

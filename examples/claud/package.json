@@ -1,7 +1,7 @@
 {
-  "name": "@cadmus/example-telly",
+  "name": "@cadmus/example-claud",
   "version": "0.1.0",
-  "description": "Telly — a Telegram-connected single-LLM agent.",
+  "description": "Claud — single-processor chat agent using llm_loop (provider-side tool loop).",
   "license": "MIT",
   "private": true,
   "type": "module",

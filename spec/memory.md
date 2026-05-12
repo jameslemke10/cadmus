@@ -72,7 +72,6 @@ interface MemoryRecord {
   scope: {
     tenant_id?: string;
     agent_id?: string;
-    session_id?: string;
   };
   tags: string[];
   importance: number;                // 0..1

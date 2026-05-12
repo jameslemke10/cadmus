@@ -2,7 +2,7 @@
  * Core types for the Cadmus runtime.
  *
  * The model is intentionally generic. The "brain" example (hippocampus,
- * thalamus, PFC, executor) is just one configuration of these primitives.
+ * thalamus, PFC) is just one configuration of these primitives.
  */
 
 export interface CadmusEvent {
@@ -11,7 +11,6 @@ export interface CadmusEvent {
   timestamp: string;
   type: string;
   agent_id: string;
-  session_id: string | null;
   /**
    * Attribution: who emitted this event. Set automatically by the runtime.
    * Conventional values:
@@ -20,18 +19,14 @@ export interface CadmusEvent {
    *   "channel:<name>"    — emitted by a channel via ctx.emit, or by
    *                         runtime.inject(text, channel) for that channel
    *   "kernel"            — emitted by the runtime itself (e.g., error)
-   *   null                — appended by external code (tests, runtime.appendEvent
-   *                         with no source provided)
+   *   null                — appended by external code with no source
    */
   source: string | null;
   data: Record<string, unknown>;
-  parent_event_id: string | null;
   tags: string[];
 }
 
 export type EmitOptions = {
-  parentEventId?: string | null;
-  sessionId?: string | null;
   tags?: string[];
   /** Override the auto-attributed source. Rare — usually omit and let the runtime fill it. */
   source?: string;
@@ -46,12 +41,9 @@ export interface Tool {
 
 export interface ToolContext {
   agentId: string;
-  /** The event that triggered the processor that called this tool. Lets tools
-   *  default things like memory provenance, session_id, parent_event_id. */
+  /** The event that triggered the processor that called this tool. */
   triggerEvent: CadmusEvent;
-  /** Emit a new event onto the timeline. By default, parent_event_id is the
-   *  surrounding tool_call, session_id inherits from the trigger, and
-   *  source is `tool:<this tool's name>`. */
+  /** Emit a new event onto the timeline. Source is `tool:<this tool's name>`. */
   emit: (type: string, data: Record<string, unknown>, opts?: EmitOptions) => Promise<CadmusEvent>;
   log: (msg: string, data?: unknown) => void;
 }
@@ -59,7 +51,6 @@ export interface ToolContext {
 export interface TimelineFilter {
   types?: string[];
   agentId?: string;
-  sessionId?: string;
   source?: string;
 }
 
@@ -68,8 +59,6 @@ export interface AppendInput {
   type: string;
   agent_id: string;
   data: Record<string, unknown>;
-  session_id?: string | null;
-  parent_event_id?: string | null;
   source?: string | null;
   tags?: string[];
 }
@@ -87,19 +76,16 @@ export interface TimelineReader {
  * The default SQLite-backed Timeline is the reference implementation.
  */
 export interface TimelineStore extends TimelineReader {
-  /** Append an event. id, seq, and timestamp are assigned by the store. Resolves with the persisted event. */
+  /** Append an event. id, seq, and timestamp are assigned by the store. */
   append(input: AppendInput): Promise<CadmusEvent>;
 
-  /** Subscribe to all newly-appended events. Listeners fire after persistence. Returns an unsubscribe function. */
+  /** Subscribe to all newly-appended events. Listeners fire after persistence. */
   subscribe(listener: (event: CadmusEvent) => void): () => void;
 
   /** Read events with seq > the given seq. Used for SSE catch-up. */
   since(seq: number, limit?: number): CadmusEvent[];
 
-  /**
-   * Permanently delete events matching the filter. Returns count deleted.
-   * Refuses an empty filter (would delete everything).
-   */
+  /** Permanently delete events matching the filter. Refuses an empty filter. */
   forget(filter: TimelineFilter): Promise<number>;
 }
 
@@ -120,7 +106,6 @@ export interface MemoryProvenance {
 export interface MemoryScope {
   tenant_id?: string;
   agent_id?: string;
-  session_id?: string;
 }
 
 /**
@@ -160,14 +145,11 @@ export interface MemorySearchArgs {
   kind?: string;
   scope?: MemoryScope;
   tags?: string[];
-  /** Default 10. */
   limit?: number;
-  /** Default 0. Score is normalized 0..1. */
   min_score?: number;
 }
 
 export interface MemorySearchHit extends MemoryRecord {
-  /** 0..1, backend-defined ranking, normalized. */
   score: number;
 }
 
@@ -176,7 +158,6 @@ export interface MemoryFilter {
   kind?: string;
   scope?: MemoryScope;
   tags?: string[];
-  /** Match records whose expires_at is in the past. */
   expired?: boolean;
 }
 
@@ -187,31 +168,12 @@ export interface MemoryStats {
   total_bytes?: number;
 }
 
-/**
- * The memory contract. Backends implement this; canonical tools
- * (memory_search / memory_write / memory_delete) wrap it.
- *
- * Mandatory invariants enforced by conforming backends:
- *  - write() rejects records without provenance.source_event_ids
- *  - same id = update; new id = create
- *  - get() updates last_accessed_at
- *  - ids are stable
- *
- * The associated memory_write / memory_delete TIMELINE events are emitted
- * by the canonical tool layer (not the store), so replaying those events
- * reconstructs the store from the timeline.
- */
 export interface MemoryStore {
   search(args: MemorySearchArgs): Promise<MemorySearchHit[]>;
-  /** Returns null if not found. MUST update last_accessed_at on hit. */
   get(id: string): Promise<MemoryRecord | null>;
-  /** Create or update. Same id = update, new/missing = create. */
   write(input: MemoryWrite): Promise<MemoryRecord>;
-  /** Delete records matching the filter. Returns count deleted. Refuses an empty filter. */
   delete(filter: MemoryFilter): Promise<number>;
-  /** Optional observability. */
   stats?(): Promise<MemoryStats>;
-  /** Optional cleanup. */
   close?(): void;
 }
 
@@ -220,11 +182,6 @@ export interface MemoryStore {
 /**
  * A filter entry. Either a bare event type (match by type only) or a
  * structured form that also constrains by source attribution.
- *
- * Examples:
- *   filter: ["input"]
- *   filter: [{ type: "memory_retrieved", source: "processor:hippocampus" }]
- *   filter: ["input", { type: "pfc_loop", source: "processor:executor" }]
  */
 export type FilterEntry = string | { type: string; source?: string };
 
@@ -242,7 +199,19 @@ export interface ProcessorContext {
   log: (msg: string, data?: unknown) => void;
 }
 
-export type ProcessorTemplate = "llm" | "code";
+/**
+ * Three execution models:
+ *   - "llm_call": one provider turn. The model can call tools and emit events,
+ *     but does NOT see tool results within the same turn. Loops are external —
+ *     the next event on the timeline (e.g. tool_result) re-triggers the
+ *     processor for the next turn.
+ *   - "llm_loop": a multi-turn provider session. The model calls tools, the
+ *     runtime feeds the results back into the SAME provider session, and the
+ *     model keeps going until it stops calling tools. Then its final text is
+ *     emitted as one of the declared outputEvents.
+ *   - "code": a TypeScript handler.
+ */
+export type ProcessorTemplate = "llm_call" | "llm_loop" | "code";
 
 export interface LLMTemplateConfig {
   /** Model id. Provider auto-detected: gemini-* → Google, claude-* → Anthropic. */
@@ -253,40 +222,27 @@ export interface LLMTemplateConfig {
   apiKey?: string;
   /** Max tokens per LLM call. Default 4096. */
   maxTokens?: number;
-  /**
-   * How many tail events to include as context. Default 50. The template
-   * always stops the walk at the most recent `event_boundary` event, so a
-   * boundary scopes the visible window regardless of this number.
-   */
+  /** How many tail events to include as context. Default 50. */
   contextEvents?: number;
   /** Temperature. Default 0.7. */
   temperature?: number;
+  /** llm_loop only: cap on provider turns per invocation. Default 10. */
+  maxIterations?: number;
 }
 
 export interface Processor {
-  /** Unique name. */
   name: string;
-  /** "llm" or "code". */
   template: ProcessorTemplate;
-  /**
-   * Event types that trigger this processor. Use a plain string to match
-   * by event type, or an object {type, source} to also constrain by
-   * attribution. See FilterEntry.
-   */
   filter: FilterEntry[];
   /** Tool names this processor has access to (resolved from agent's tool registry). */
   tools?: string[];
-  /** Event types this processor emits. The framework synthesizes emit_<type> tools for LLM processors. */
+  /** Event types this processor emits. */
   outputEvents?: string[];
-  /** Per-event-type input schema (JSON Schema fragments). Used for documentation + validation. */
   inputSchema?: Record<string, Record<string, unknown>>;
-  /** Per-event-type output schema. */
   outputSchema?: Record<string, Record<string, unknown>>;
-  /** Config for the chosen template. */
   templateConfig?: LLMTemplateConfig;
   /** Handler for `code` template. */
   handler?: (event: CadmusEvent, ctx: ProcessorContext) => Promise<void>;
-  /** Free-form per-instance config the handler/template can read. */
   config?: Record<string, unknown>;
 }
 
@@ -311,14 +267,7 @@ export function filterTypes(filter: FilterEntry[]): string[] {
 
 // ──── Channel ─────────────────────────────────────────────────────────────
 
-/**
- * What a Channel sees from the runtime: emit, subscribe, read-only timeline,
- * and a logger. Channels do NOT have direct callTool access — they interact
- * with the agent purely through events.
- */
 export interface ChannelEmitOptions {
-  /** Stamp the emitted event with a session_id so descendants inherit it. Channels use this for stateless reply routing. */
-  sessionId?: string | null;
   /** Override the auto-attributed source (usually leave undefined). */
   source?: string;
 }
@@ -326,47 +275,35 @@ export interface ChannelEmitOptions {
 export interface ChannelContext {
   agentId: string;
   timeline: TimelineReader;
-  /** Emit an event onto the timeline. The runtime fills in agent_id / id / seq / timestamp / source. */
   emit: (
     type: string,
     data: Record<string, unknown>,
     opts?: ChannelEmitOptions,
   ) => Promise<CadmusEvent>;
-  /** Subscribe to all newly-appended events. Returns an unsubscribe function. */
   subscribe: (listener: (event: CadmusEvent) => void) => () => void;
   log: (msg: string, data?: unknown) => void;
 }
 
 /**
- * A Channel bridges between an external system (CLI, Studio, Slack, etc.)
- * and the timeline. Channels emit `input` events when external traffic
- * arrives and route `output` events whose `data.channel` matches their name
- * (or is "*") back to the external system.
- *
- * See spec/channel.md for the full contract.
+ * A Channel bridges between an external system (CLI, Studio, etc.) and the
+ * timeline. Channels emit `input` events when external traffic arrives and
+ * route `output` events whose `data.channel` matches their name (or is "*")
+ * back to the external system.
  */
 export interface Channel {
-  /** Unique name. Used as the `channel` field on input/output events and as the source prefix. */
   name: string;
-  /** Event types this channel emits onto the timeline. Typically ["input"]. */
   inboundEvents?: string[];
-  /** Event types this channel routes off the timeline. Typically ["output"]. */
   outboundEvents?: string[];
-  /** Begin listening to the external system. Idempotent. */
   start: (ctx: ChannelContext) => Promise<void>;
-  /** Stop and disconnect. Should drain in-flight work where reasonable. */
   stop: () => Promise<void>;
-  /** Free-form per-instance config. */
   config?: Record<string, unknown>;
 }
 
 export interface AgentConfig {
   agentId: string;
   name: string;
-  /** Map of tool name -> Tool. */
   tools?: Record<string, Tool>;
   processors: Processor[];
-  /** Channels that bridge this agent to external systems. Started at runtime.start(). */
   channels?: Channel[];
   storage?: {
     /** Path to the SQLite timeline file. Default: .cadmus/timeline.db */
@@ -375,8 +312,6 @@ export interface AgentConfig {
 }
 
 export interface RuntimeOptions {
-  /** Verbose logging to stdout. */
   verbose?: boolean;
-  /** Called for every emitted event (after persistence). */
   onEvent?: (event: CadmusEvent) => void;
 }

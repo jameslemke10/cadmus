@@ -2,8 +2,8 @@
  * Internal entry-point spawned by the CLI under tsx.
  * Args: <configPath> <port> <mode:"dev"|"run">
  */
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   Runtime,
@@ -12,7 +12,53 @@ import {
   startServer,
   type AgentConfig,
 } from "@cadmus/kernel";
-import { listAgents, readConfig, updateConfig } from "./workspace.js";
+import { AGENTS_DIR, listAgents, readConfig, updateConfig } from "./workspace.js";
+
+const CONFIG_CANDIDATES = [
+  "cadmus.config.ts",
+  "cadmus.config.mts",
+  "cadmus.config.js",
+  "cadmus.config.mjs",
+];
+
+function findConfigInDir(dir: string): string | null {
+  for (const c of CONFIG_CANDIDATES) {
+    const p = join(dir, c);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Build a workspace from the parent of the running config — used in local
+ * dev (`cadmus dev examples/foo/cadmus.config.ts`). Sidebar shows sibling
+ * dirs that contain a cadmus.config.*. No `onSwitch` is provided — to load
+ * a different agent, restart `cadmus dev` with the new path.
+ */
+function buildLocalWorkspace(configPath: string) {
+  const dir = dirname(resolve(configPath));
+  const parent = dirname(dir);
+  const myName = basename(dir);
+  if (!existsSync(parent)) return undefined;
+
+  const agents: { name: string; path: string; active: boolean }[] = [];
+  for (const entry of readdirSync(parent)) {
+    const full = join(parent, entry);
+    let s;
+    try {
+      s = statSync(full);
+    } catch {
+      continue;
+    }
+    if (!s.isDirectory()) continue;
+    if (!findConfigInDir(full)) continue;
+    agents.push({ name: entry, path: full, active: entry === myName });
+  }
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+  if (agents.length === 0) return undefined;
+
+  return { activeAgent: myName, agents };
+}
 
 async function main() {
   const [configPath, portArg, mode] = process.argv.slice(2);
@@ -57,25 +103,36 @@ async function main() {
   if (mode === "dev") {
     const port = Number(portArg) || 4000;
 
-    // Workspace info (optional — only meaningful when running under
-    // ~/.cadmus). Studio uses this to show the agent sidebar.
+    // Workspace info shown in the Studio sidebar.
+    //
+    // - If the running config lives inside ~/.cadmus/agents/ (production —
+    //   `cadmus start` always lands here), use the global workspace and
+    //   `onSwitch` writes to ~/.cadmus/config.json.
+    // - Otherwise (local dev — `cadmus dev examples/foo/cadmus.config.ts`),
+    //   build a workspace from sibling directories of the running config
+    //   and `onSwitch` re-spawns the supervisor onto the chosen sibling.
     const workspaceInfo = (() => {
       try {
-        const agents = listAgents();
-        if (agents.length === 0) return undefined;
-        const cfg = readConfig();
-        const activeAgent = cfg.activeAgent ?? config.agentId;
-        return {
-          activeAgent,
-          agents: agents.map((a) => ({
-            name: a.name,
-            path: a.path,
-            active: a.name === activeAgent,
-          })),
-          onSwitch: async (name: string) => {
-            updateConfig({ activeAgent: name });
-          },
-        };
+        const resolvedConfig = resolve(configPath);
+        const isInstalled = dirname(dirname(resolvedConfig)) === resolve(AGENTS_DIR);
+        if (isInstalled) {
+          const agents = listAgents();
+          if (agents.length === 0) return undefined;
+          const cfg = readConfig();
+          const activeAgent = cfg.activeAgent ?? config.agentId;
+          return {
+            activeAgent,
+            agents: agents.map((a) => ({
+              name: a.name,
+              path: a.path,
+              active: a.name === activeAgent,
+            })),
+            onSwitch: async (name: string) => {
+              updateConfig({ activeAgent: name });
+            },
+          };
+        }
+        return buildLocalWorkspace(resolvedConfig);
       } catch {
         return undefined;
       }

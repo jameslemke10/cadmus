@@ -77,7 +77,7 @@ for (const e of events) {
     .split("\n")
     .map((l, i) => (i === 0 ? l : "      " + l))
     .join("\n");
-  console.log(`  [${e.seq}] ${e.type}${e.parent_event_id ? `  ← ${e.parent_event_id.slice(0, 12)}` : ""}`);
+  console.log(`  [${e.seq}] ${e.type}${e.source ? `  (${e.source})` : ""}`);
   console.log(`      ${data.slice(0, 500)}${data.length > 500 ? "…" : ""}`);
 }
 

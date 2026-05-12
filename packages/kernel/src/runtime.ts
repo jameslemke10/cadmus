@@ -1,5 +1,6 @@
 import { eventId } from "./id.js";
-import { runLLMTemplate } from "./templates/llm.js";
+import { runLLMCallTemplate } from "./templates/llm_call.js";
+import { runLLMLoopTemplate } from "./templates/llm_loop.js";
 import { Timeline } from "./timeline.js";
 import {
   eventMatchesFilter,
@@ -17,7 +18,7 @@ import {
 
 const DEFAULT_TIMELINE_PATH = ".cadmus/timeline.db";
 
-/** Event types that the runtime itself emits — used by validateWiring to suppress false-positive warnings. */
+/** Event types the runtime itself emits — used by validateWiring to suppress false-positive warnings. */
 const FRAMEWORK_EMITTED = new Set<string>([
   "input",
   "tool_call",
@@ -25,11 +26,9 @@ const FRAMEWORK_EMITTED = new Set<string>([
   "memory_write",
   "memory_delete",
   "error",
-  // Convention: channels emit this when the user (or another channel signal)
-  // marks a divider in the stream. The LLM template always scopes its context
-  // walk to events at-or-after the most recent boundary.
+  // Channels emit this to mark a divider in the stream. The LLM templates
+  // scope their context window to events at-or-after the most recent boundary.
   "event_boundary",
-  // External/system events that aren't strictly framework-emitted but conventionally exist.
   "timer_fired",
   "notification_received",
 ]);
@@ -62,7 +61,6 @@ export class Runtime {
 
   /** Runs once at construct time. Throws on hard errors; warns on soft issues. */
   private validate(): void {
-    // Hard error: tool name uses the reserved emit_ prefix.
     for (const name of Object.keys(this.tools)) {
       if (name.startsWith("emit_")) {
         throw new Error(
@@ -71,7 +69,6 @@ export class Runtime {
       }
     }
 
-    // Hard error: duplicate channel names.
     const seenChannels = new Set<string>();
     for (const ch of this.channels) {
       if (seenChannels.has(ch.name)) {
@@ -80,7 +77,6 @@ export class Runtime {
       seenChannels.add(ch.name);
     }
 
-    // Hard error: duplicate processor names.
     const seenProcs = new Set<string>();
     for (const p of this.processors) {
       if (seenProcs.has(p.name)) {
@@ -89,7 +85,6 @@ export class Runtime {
       seenProcs.add(p.name);
     }
 
-    // Soft warn: a processor filters on an event type nothing emits.
     const emitted = new Set<string>(FRAMEWORK_EMITTED);
     for (const p of this.processors) {
       for (const e of p.outputEvents ?? []) emitted.add(e);
@@ -111,7 +106,6 @@ export class Runtime {
       void this.drain();
     });
 
-    // Start channels.
     for (const ch of this.channels) {
       try {
         await ch.start(this.makeChannelContext(ch));
@@ -128,7 +122,6 @@ export class Runtime {
     if (!this.running) return;
     this.running = false;
 
-    // Stop channels first so they release resources before we tear down the queue.
     for (const ch of this.channels) {
       try {
         await ch.stop();
@@ -143,23 +136,19 @@ export class Runtime {
     }
   }
 
-  /** Inject an input event (the typical external trigger). source defaults to `channel:<channel>`. */
+  /** Inject an input event (the typical external trigger). */
   async inject(text: string, channel: string = "app", kind: string = "text"): Promise<CadmusEvent> {
     return this.appendEvent({
       type: "input",
       data: { channel, kind, text },
       source: `channel:${channel}`,
-      parent_event_id: null,
       tags: ["external"],
     });
   }
 
-  /** Append an arbitrary event onto the timeline. */
   async appendEvent(input: {
     type: string;
     data: Record<string, unknown>;
-    session_id?: string | null;
-    parent_event_id?: string | null;
     source?: string | null;
     tags?: string[];
   }): Promise<CadmusEvent> {
@@ -167,8 +156,6 @@ export class Runtime {
       type: input.type,
       agent_id: this.agentId,
       data: input.data,
-      session_id: input.session_id ?? null,
-      parent_event_id: input.parent_event_id ?? null,
       source: input.source ?? null,
       tags: input.tags ?? [],
     });
@@ -195,15 +182,23 @@ export class Runtime {
     const ctx = this.makeContext(proc, event);
     this.log(`▶ ${proc.name} <- ${event.type}`);
     try {
-      if (proc.template === "llm") {
-        await runLLMTemplate(proc, event, ctx, this.tools);
-      } else if (proc.template === "code") {
-        if (!proc.handler) {
-          throw new Error(`Processor ${proc.name} (code) has no handler`);
+      switch (proc.template) {
+        case "llm_call":
+          await runLLMCallTemplate(proc, event, ctx, this.tools);
+          break;
+        case "llm_loop":
+          await runLLMLoopTemplate(proc, event, ctx, this.tools);
+          break;
+        case "code":
+          if (!proc.handler) {
+            throw new Error(`Processor ${proc.name} (code) has no handler`);
+          }
+          await proc.handler(event, ctx);
+          break;
+        default: {
+          const t: never = proc.template;
+          throw new Error(`Unknown template ${String(t)} for ${proc.name}`);
         }
-        await proc.handler(event, ctx);
-      } else {
-        throw new Error(`Unknown template ${proc.template} for ${proc.name}`);
       }
     } catch (err) {
       this.log(`✗ ${proc.name} threw: ${err instanceof Error ? err.message : String(err)}`);
@@ -217,8 +212,6 @@ export class Runtime {
           triggering_event_id: event.id,
         },
         source: "kernel",
-        session_id: event.session_id,
-        parent_event_id: event.id,
         tags: ["error"],
       });
     }
@@ -235,8 +228,6 @@ export class Runtime {
         this.appendEvent({
           type,
           data,
-          session_id: opts.sessionId ?? event.session_id,
-          parent_event_id: opts.parentEventId ?? event.id,
           source: opts.source ?? procSource,
           tags: opts.tags ?? [proc.name],
         }),
@@ -244,15 +235,11 @@ export class Runtime {
         const tool = this.tools[name];
         if (!tool) throw new Error(`Tool not found: ${name}`);
 
-        // Auto-emit tool_call before invocation, tool_result after.
-        // Both pair via call_id, and both are attributed to the processor that called the tool.
         const callId = eventId();
-        const callEvent = await this.appendEvent({
+        await this.appendEvent({
           type: "tool_call",
           data: { tool: name, args, call_id: callId },
           source: procSource,
-          session_id: event.session_id,
-          parent_event_id: event.id,
           tags: [proc.name, "tool"],
         });
 
@@ -260,13 +247,10 @@ export class Runtime {
           const result = await tool.handler(args, {
             agentId: this.agentId,
             triggerEvent: event,
-            // Emits from inside a tool handler attribute to the tool itself.
             emit: async (type, data, opts: EmitOptions = {}) =>
               this.appendEvent({
                 type,
                 data,
-                session_id: opts.sessionId ?? event.session_id,
-                parent_event_id: opts.parentEventId ?? callEvent.id,
                 source: opts.source ?? `tool:${name}`,
                 tags: opts.tags ?? [`tool:${name}`],
               }),
@@ -276,8 +260,6 @@ export class Runtime {
             type: "tool_result",
             data: { tool: name, call_id: callId, result, is_error: false },
             source: procSource,
-            session_id: event.session_id,
-            parent_event_id: callEvent.id,
             tags: [proc.name, "tool"],
           });
           return result;
@@ -291,8 +273,6 @@ export class Runtime {
               is_error: true,
             },
             source: procSource,
-            session_id: event.session_id,
-            parent_event_id: callEvent.id,
             tags: [proc.name, "tool"],
           });
           throw err;
@@ -312,7 +292,6 @@ export class Runtime {
           type,
           data,
           source: opts.source ?? chSource,
-          session_id: opts.sessionId ?? null,
           tags: [`channel:${channel.name}`],
         }),
       subscribe: (listener) => this.timeline.subscribe(listener),

@@ -41,9 +41,10 @@ The runtime appends a `user_input` event onto its SQLite timeline. The `responde
 
 ## Concepts
 
-- **Event** — `{ id, seq, timestamp, type, agent_id, data, parent_event_id, tags }`. Any string is a valid `type`. Events are append-only.
-- **Processor** — listens to event types via `filter`, emits via `outputEvents`. Two templates:
-  - `llm` — Anthropic model + tools. Synthesized `emit_<type>` tools wrap each output event so the model emits by tool-calling.
+- **Event** — `{ id, seq, timestamp, type, agent_id, source, data, tags }`. Any string is a valid `type`. Events are append-only.
+- **Processor** — listens to event types via `filter`, emits via `outputEvents`. Three templates:
+  - `llm_call` — one provider turn per invocation. Synthesized `emit_<type>` tools wrap each output event. Loops via timeline events.
+  - `llm_loop` — multi-turn provider session per invocation. Tool results are fed back into the same session; final text becomes the output event.
   - `code` — your async handler. Same `ProcessorContext` (emit, callTool, timeline, log). No LLM cost.
 - **Tool** — JSON-schema input + handler. Any processor can declare tools it has access to.
 

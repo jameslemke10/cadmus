@@ -48,8 +48,19 @@ packages/*/dist/
 apps/*/.next/
 examples/*/.cadmus/
 
-# Editor / IDE / dev tooling — contributor-specific
-.claude/
-.claudeignore
+# Editor / IDE — contributor-specific
 .vscode/
 .idea/
+
+# AI assistant configs — personal, not shipped. Anyone using one of these
+# can keep their own file locally; the contributor docs live in CONTRIBUTING.md.
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+.claudeignore
+.cursor/
+.cursorrules
+.aider*
+.windsurfrules
+.continue/

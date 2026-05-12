@@ -37,7 +37,7 @@ export function ProcessorInspector({ processor, recentEvents, onClose }: Props) 
             <h2 className="text-xl font-semibold tracking-tight">{processor.name}</h2>
             <div className="mt-1 flex items-center gap-2 text-xs text-stone-500">
               <span className="font-mono">{processor.template}</span>
-              {processor.template === "llm" && processor.templateConfig?.model && (
+              {processor.template.startsWith("llm") && processor.templateConfig?.model && (
                 <>
                   <span>·</span>
                   <span className="font-mono">{processor.templateConfig.model}</span>
@@ -82,7 +82,7 @@ export function ProcessorInspector({ processor, recentEvents, onClose }: Props) 
             </Section>
           )}
 
-          {processor.template === "llm" && processor.templateConfig?.systemPrompt && (
+          {processor.template.startsWith("llm") && processor.templateConfig?.systemPrompt && (
             <Section label="System prompt">
               <pre className="text-[12px] font-mono bg-stone-50 border border-stone-200 rounded p-3 whitespace-pre-wrap leading-relaxed text-stone-800 max-h-96 overflow-y-auto">
                 {processor.templateConfig.systemPrompt}
@@ -90,7 +90,7 @@ export function ProcessorInspector({ processor, recentEvents, onClose }: Props) 
             </Section>
           )}
 
-          {processor.template === "llm" && processor.templateConfig && (
+          {processor.template.startsWith("llm") && processor.templateConfig && (
             <Section label="Settings">
               <dl className="grid grid-cols-[120px_1fr] gap-y-1 text-xs">
                 {processor.templateConfig.temperature !== undefined && (

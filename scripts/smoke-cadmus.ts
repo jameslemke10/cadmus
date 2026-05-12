@@ -1,8 +1,9 @@
 /**
  * Smoke test for the Cadmus brain pipeline end-to-end.
  *
- * Five processors: hippocampus → thalamus → PFC → executor, plus the
- * pfc itself uses memory_write tool calls.
+ * Three processors: hippocampus → thalamus → PFC, with PFC looping back
+ * to hippocampus via the pfc_loop event when it needs another pass. PFC
+ * may also call memory_write / web_search / web_fetch.
  */
 
 import { resolve } from "node:path";

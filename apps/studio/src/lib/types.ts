@@ -4,10 +4,8 @@ export interface CadmusEvent {
   timestamp: string;
   type: string;
   agent_id: string;
-  session_id: string | null;
   source: string | null;
   data: Record<string, unknown>;
-  parent_event_id: string | null;
   tags: string[];
 }
 
@@ -16,7 +14,7 @@ export type FilterEntry = string | { type: string; source?: string };
 
 export interface ProcessorMeta {
   name: string;
-  template: "llm" | "code";
+  template: "llm_call" | "llm_loop" | "code";
   filter: FilterEntry[];
   outputEvents: string[];
   tools: string[];

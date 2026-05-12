@@ -56,7 +56,6 @@ type Row = {
   content: string;
   scope_tenant_id: string | null;
   scope_agent_id: string | null;
-  scope_session_id: string | null;
   tags: string;
   importance: number;
   created_at: string;
@@ -69,7 +68,6 @@ function rowToRecord(row: Row): MemoryRecord {
   const scope: MemoryRecord["scope"] = {};
   if (row.scope_tenant_id) scope.tenant_id = row.scope_tenant_id;
   if (row.scope_agent_id) scope.agent_id = row.scope_agent_id;
-  if (row.scope_session_id) scope.session_id = row.scope_session_id;
   return {
     id: row.id,
     kind: row.kind,
@@ -99,7 +97,6 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
       content TEXT NOT NULL,
       scope_tenant_id TEXT,
       scope_agent_id TEXT,
-      scope_session_id TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
       importance REAL NOT NULL DEFAULT 0.5,
       created_at TEXT NOT NULL,
@@ -109,9 +106,8 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
     );
     CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory_records(kind);
     CREATE INDEX IF NOT EXISTS idx_memory_scope_agent ON memory_records(scope_agent_id);
-    CREATE INDEX IF NOT EXISTS idx_memory_scope_session ON memory_records(scope_session_id);
   `);
-  db.pragma("user_version = 1");
+  db.pragma("user_version = 2");
 
   return {
     async search(args: MemorySearchArgs): Promise<MemorySearchHit[]> {
@@ -130,10 +126,6 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
       if (args.scope?.agent_id) {
         clauses.push("scope_agent_id = ?");
         params.push(args.scope.agent_id);
-      }
-      if (args.scope?.session_id) {
-        clauses.push("scope_session_id = ?");
-        params.push(args.scope.session_id);
       }
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const rows = db.prepare(`SELECT * FROM memory_records ${where}`).all(...params) as Row[];
@@ -195,15 +187,14 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
 
       db.prepare(
         `INSERT INTO memory_records
-          (id, kind, content, scope_tenant_id, scope_agent_id, scope_session_id,
+          (id, kind, content, scope_tenant_id, scope_agent_id,
            tags, importance, created_at, last_accessed_at, expires_at, provenance)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            kind = excluded.kind,
            content = excluded.content,
            scope_tenant_id = excluded.scope_tenant_id,
            scope_agent_id = excluded.scope_agent_id,
-           scope_session_id = excluded.scope_session_id,
            tags = excluded.tags,
            importance = excluded.importance,
            last_accessed_at = excluded.last_accessed_at,
@@ -215,7 +206,6 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
         input.content,
         input.scope?.tenant_id ?? null,
         input.scope?.agent_id ?? null,
-        input.scope?.session_id ?? null,
         JSON.stringify(input.tags ?? []),
         input.importance ?? 0.5,
         created_at,
@@ -256,10 +246,6 @@ export function createSqliteMemoryStore(options: CreateMemoryOptions = {}): Memo
       if (filter.scope?.agent_id) {
         clauses.push("scope_agent_id = ?");
         params.push(filter.scope.agent_id);
-      }
-      if (filter.scope?.session_id) {
-        clauses.push("scope_session_id = ?");
-        params.push(filter.scope.session_id);
       }
       if (filter.expired === true) {
         clauses.push("expires_at IS NOT NULL AND expires_at < ?");
@@ -398,7 +384,6 @@ export function createMemoryTools(store: MemoryStore): Record<string, Tool> {
         expires_at: a.expires_at,
         scope: {
           agent_id: ctx.agentId,
-          session_id: ctx.triggerEvent.session_id ?? undefined,
         },
         provenance: {
           source_event_ids: [ctx.triggerEvent.id],

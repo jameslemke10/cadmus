@@ -194,6 +194,7 @@ export function Studio() {
               {timelineOpen && (
                 <TimelineDrawer
                   events={events}
+                  currentAgentId={agent?.id ?? null}
                   onClose={() => setTimelineOpen(false)}
                 />
               )}
@@ -311,39 +312,81 @@ function Header({
 
 function TimelineDrawer({
   events,
+  currentAgentId,
   onClose,
 }: {
   events: CadmusEvent[];
+  currentAgentId: string | null;
   onClose: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  // Default: only show events for the active agent. Toggle "all" to see
+  // events from other agents that share this timeline DB.
+  const visible = useMemo(() => {
+    if (showAll || !currentAgentId) return events;
+    return events.filter((e) => e.agent_id === currentAgentId);
+  }, [events, showAll, currentAgentId]);
+
+  // Distinct agents in the buffer — only show the toggle if there's something to toggle.
+  const otherAgents = useMemo(() => {
+    if (!currentAgentId) return [] as string[];
+    const seen = new Set<string>();
+    for (const e of events) if (e.agent_id !== currentAgentId) seen.add(e.agent_id);
+    return [...seen];
+  }, [events, currentAgentId]);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [events.length]);
+  }, [visible.length]);
 
   return (
     <div className="absolute right-3 top-3 bottom-3 w-[360px] bg-white border border-stone-200 rounded-xl shadow-lg z-20 flex flex-col">
-      <header className="px-3 py-2 border-b border-stone-200 flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold">
-          timeline · {events.length}
+      <header className="px-3 py-2 border-b border-stone-200 flex items-center justify-between gap-2">
+        <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold truncate">
+          timeline · {visible.length}
+          {!showAll && events.length !== visible.length && (
+            <span className="ml-1 text-stone-400 normal-case font-normal">
+              of {events.length}
+            </span>
+          )}
         </div>
-        <button
-          onClick={onClose}
-          className="text-stone-400 hover:text-stone-700 text-sm px-1"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-2">
+          {otherAgents.length > 0 && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition ${
+                showAll
+                  ? "bg-stone-900 text-white border-stone-900"
+                  : "bg-white text-stone-600 border-stone-200 hover:bg-stone-50"
+              }`}
+              title={
+                showAll
+                  ? `Showing all agents (${otherAgents.length + 1})`
+                  : `Hiding ${otherAgents.length} other agent(s) on this timeline`
+              }
+            >
+              all agents
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-stone-400 hover:text-stone-700 text-sm px-1"
+          >
+            ✕
+          </button>
+        </div>
       </header>
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-        {events.length === 0 && (
+        {visible.length === 0 && (
           <div className="text-center text-stone-400 text-xs py-8">
             no events yet
           </div>
         )}
-        {events.map((e) => (
+        {visible.map((e) => (
           <div
             key={e.id}
             className={`px-2 py-1.5 rounded border text-xs ${eventColor(e.type)}`}
@@ -351,6 +394,11 @@ function TimelineDrawer({
             <div className="flex items-baseline justify-between gap-2">
               <span className="font-mono opacity-50">#{e.seq}</span>
               <span className="font-mono font-medium truncate">{e.type}</span>
+              {showAll && e.agent_id !== currentAgentId && (
+                <span className="font-mono opacity-60 text-[10px] bg-white/60 border border-current/20 rounded px-1">
+                  {e.agent_id}
+                </span>
+              )}
               <span className="font-mono opacity-40 text-[10px] ml-auto">
                 {new Date(e.timestamp).toLocaleTimeString().slice(0, 8)}
               </span>

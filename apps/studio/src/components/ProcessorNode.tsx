@@ -55,7 +55,7 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
             {processor.template}
           </span>
         </div>
-        {processor.template === "llm" && processor.templateConfig?.model && (
+        {processor.template.startsWith("llm") && processor.templateConfig?.model && (
           <div className="mt-0.5 text-[11px] font-mono text-stone-400">
             {processor.templateConfig.model}
           </div>

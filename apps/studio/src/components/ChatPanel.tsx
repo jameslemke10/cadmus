@@ -20,10 +20,12 @@ interface Message {
 
 // Studio is the "studio" channel. It only displays inputs originating from
 // itself and outputs targeting itself (or broadcast "*"). Other channels
-// (cli, telegram, ...) have their own routing.
-function eventsToMessages(events: CadmusEvent[]): Message[] {
+// (cli, ...) have their own routing. Events from a different agent (when
+// the timeline DB is shared across agents) are also filtered out.
+function eventsToMessages(events: CadmusEvent[], agentId: string | null): Message[] {
   const messages: Message[] = [];
   for (const e of events) {
+    if (agentId && e.agent_id !== agentId) continue;
     if (e.type === "input") {
       const d = e.data as { channel?: string; text?: string };
       if (d.channel !== "studio") continue;
@@ -46,7 +48,10 @@ function eventsToMessages(events: CadmusEvent[]): Message[] {
 }
 
 export function ChatPanel({ api, agent, events, connected }: Props) {
-  const messages = useMemo(() => eventsToMessages(events), [events]);
+  const messages = useMemo(
+    () => eventsToMessages(events, agent?.id ?? null),
+    [events, agent?.id],
+  );
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
