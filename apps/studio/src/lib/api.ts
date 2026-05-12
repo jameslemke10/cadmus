@@ -31,19 +31,37 @@ export async function injectEvent(
 }
 
 export type LayoutNodes = Record<string, { x: number; y: number }>;
+export type LayoutEdges = Record<
+  string,
+  {
+    sourceHandle?: string;
+    targetHandle?: string;
+    waypoints?: { x: number; y: number }[];
+    labelOffset?: { dx: number; dy: number };
+  }
+>;
 
-export async function fetchLayout(api: string): Promise<LayoutNodes> {
-  const res = await fetch(`${api}/api/layout`);
-  if (!res.ok) return {};
-  const body = (await res.json()) as { nodes?: LayoutNodes };
-  return body.nodes ?? {};
+export interface Layout {
+  nodes: LayoutNodes;
+  edges: LayoutEdges;
 }
 
-export async function saveLayout(api: string, nodes: LayoutNodes): Promise<void> {
+export async function fetchLayout(api: string): Promise<Layout> {
+  const res = await fetch(`${api}/api/layout`);
+  if (!res.ok) return { nodes: {}, edges: {} };
+  const body = (await res.json()) as { nodes?: LayoutNodes; edges?: LayoutEdges };
+  return { nodes: body.nodes ?? {}, edges: body.edges ?? {} };
+}
+
+export async function saveLayout(
+  api: string,
+  nodes: LayoutNodes,
+  edges: LayoutEdges,
+): Promise<void> {
   const res = await fetch(`${api}/api/layout`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ nodes }),
+    body: JSON.stringify({ nodes, edges }),
   });
   if (!res.ok) {
     const j = (await res.json().catch(() => ({}))) as { error?: string };

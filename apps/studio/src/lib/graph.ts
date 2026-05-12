@@ -1,12 +1,25 @@
-import type { Edge, Node } from "@xyflow/react";
+import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import type { ChannelMeta, ProcessorMeta } from "./types";
 import { filterEventTypes, filterMatchesType } from "./filter";
+import { CENTER } from "./handles";
 import type { ChannelNodeData } from "../components/ChannelNode";
 import type { MemoryNodeData } from "../components/MemoryNode";
+
+/** A point in flow (graph) coordinates that an edge passes through. */
+export interface Waypoint {
+  x: number;
+  y: number;
+}
 
 export interface ProcessorNodeData extends Record<string, unknown> {
   processor: ProcessorMeta;
   pulse: number;
+  /** Handle ids actually used by an edge in the current graph. Nodes only
+   *  render handles in this set unless `revealAllHandles` is true. */
+  usedHandles: string[];
+  /** When true (during a reconnect drag), the node renders ALL of its
+   *  declared handles so the user has somewhere to drop the endpoint. */
+  revealAllHandles: boolean;
 }
 
 const COLUMN_WIDTH = 380;
@@ -54,7 +67,14 @@ export function buildGraph(
       id,
       type: "channel",
       position: { x: 80, y: 60 + rowIdx * ROW_HEIGHT },
-      data: { name: ch.name, side: "in", events: ch.inboundEvents ?? [], pulse: 0 },
+      data: {
+        name: ch.name,
+        side: "in",
+        events: ch.inboundEvents ?? [],
+        pulse: 0,
+        usedHandles: [],
+        revealAllHandles: false,
+      },
     });
     nodeColumn.set(id, -1);
   }
@@ -66,7 +86,7 @@ export function buildGraph(
         id: p.name,
         type: "processor",
         position: { x: procXOffset + layerIdx * COLUMN_WIDTH, y: 60 + rowIdx * ROW_HEIGHT },
-        data: { processor: p, pulse: 0 },
+        data: { processor: p, pulse: 0, usedHandles: [], revealAllHandles: false },
       });
       nodeColumn.set(p.name, layerIdx);
     }
@@ -80,7 +100,14 @@ export function buildGraph(
       id,
       type: "channel",
       position: { x: outX, y: 60 + rowIdx * ROW_HEIGHT },
-      data: { name: ch.name, side: "out", events: ch.outboundEvents ?? [], pulse: 0 },
+      data: {
+        name: ch.name,
+        side: "out",
+        events: ch.outboundEvents ?? [],
+        pulse: 0,
+        usedHandles: [],
+        revealAllHandles: false,
+      },
     });
     nodeColumn.set(id, procColumns);
   }
@@ -97,7 +124,7 @@ export function buildGraph(
       id: MEMORY_NODE_ID,
       type: "memory",
       position: { x: memoryX, y: memoryY },
-      data: { pulse: 0 },
+      data: { pulse: 0, usedHandles: [], revealAllHandles: false },
     });
   }
 
@@ -152,18 +179,40 @@ export function buildGraph(
     edges.push(makeFlowEdge(source, target, events, isBack));
   }
 
-  // Memory edges. Connect processor.memHandles ↔ memory.top via explicit
-  // handles so they don't try to route through the side flow.
+  // Memory edges. Connect processor.bottom ↔ memory.top with positional
+  // handles. We pick offset positions so writes/reads don't visually overlap.
   for (const p of memoryUsers) {
     const tools = p.tools ?? [];
     const reads = tools.filter((t) => MEMORY_READ_TOOLS.has(t));
     const writes = tools.filter((t) => MEMORY_WRITE_TOOLS.has(t));
     if (reads.length > 0) {
-      edges.push(makeMemoryEdge(MEMORY_NODE_ID, "read-out", p.name, "mem-in", "memory_read"));
+      edges.push(makeMemoryEdge(MEMORY_NODE_ID, "top-3", p.name, "bottom-4", "memory_read"));
     }
     if (writes.length > 0) {
-      edges.push(makeMemoryEdge(p.name, "mem-out", MEMORY_NODE_ID, "write-in", "memory_write"));
+      edges.push(makeMemoryEdge(p.name, "bottom-3", MEMORY_NODE_ID, "top-1", "memory_write"));
     }
+  }
+
+  // Tally which handles each node actually exposes via an edge. Nodes use
+  // this to decide which Handle dots to render — empty boxes don't sprout
+  // decorative circles.
+  const usedByNode = new Map<string, Set<string>>();
+  const note = (nodeId: string, handle: string | null | undefined) => {
+    if (!handle) return;
+    let set = usedByNode.get(nodeId);
+    if (!set) {
+      set = new Set();
+      usedByNode.set(nodeId, set);
+    }
+    set.add(handle);
+  };
+  for (const e of edges) {
+    note(e.source, e.sourceHandle);
+    note(e.target, e.targetHandle);
+  }
+  for (const n of nodes) {
+    const set = usedByNode.get(n.id);
+    n.data = { ...n.data, usedHandles: set ? [...set] : [] };
   }
 
   return { nodes, edges };
@@ -175,10 +224,11 @@ function makeFlowEdge(source: string, target: string, events: string[], isBack: 
   const label =
     events.length <= 2 ? events.join(" | ") : `${events[0]} | +${events.length - 1} more`;
 
-  // Forward edges flow right→left as before. Back-edges route under the
-  // row using the bottom→top handles defined on ProcessorNode.
-  const sourceHandle = isBack ? "back-out" : "out";
-  const targetHandle = isBack ? "back-in" : "in";
+  // Forward edges go right-center → left-center. Back-edges route under
+  // the row via bottom-edge → top-edge so the line bends below instead of
+  // through the row of nodes.
+  const sourceHandle = isBack ? "bottom-0" : CENTER.right;
+  const targetHandle = isBack ? "top-0" : CENTER.left;
 
   return {
     id: `${source}__${events.join(",")}__${target}`,
@@ -187,11 +237,23 @@ function makeFlowEdge(source: string, target: string, events: string[], isBack: 
     target,
     targetHandle,
     label,
-    type: "smoothstep",
+    type: "flow",
     animated: false,
-    // Store the underlying event types so the runtime pulse can still match.
-    data: { eventType: events[0], eventTypes: events },
+    // Store the underlying event types (for pulse matching) and an empty
+    // waypoint array (for manual routing — populated by the user via
+    // click-to-add on the canvas).
+    data: { eventType: events[0], eventTypes: events, waypoints: [] as Waypoint[] },
     pathOptions: { borderRadius: 16, offset: isBack ? 28 : 16 },
+    // Allow the user to drag either endpoint to a different handle on the
+    // same source/target node (the canvas restricts cross-node moves).
+    reconnectable: true,
+    // Arrowhead at the target end so flow direction is unambiguous.
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 16,
+      height: 16,
+      color: "#a8a29e",
+    },
     labelStyle: {
       fontSize: 11,
       fontFamily: "ui-monospace, monospace",
@@ -222,10 +284,17 @@ function makeMemoryEdge(
     target,
     targetHandle,
     label,
-    type: "smoothstep",
+    type: "flow",
     animated: false,
-    data: { eventType: label },
+    data: { eventType: label, waypoints: [] as Waypoint[] },
     pathOptions: { borderRadius: 12, offset: 12 },
+    reconnectable: true,
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 14,
+      height: 14,
+      color: "#10b981",
+    },
     labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#1c1917" },
     labelBgStyle: { fill: "#ffffff", stroke: "#d1fae5", strokeWidth: 1 },
     labelBgPadding: [5, 3] as [number, number],

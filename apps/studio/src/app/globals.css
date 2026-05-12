@@ -24,3 +24,63 @@ html, body {
 code, pre {
   font-family: "Geist Mono", "SF Mono", ui-monospace, monospace;
 }
+
+/* ───────────────────────────────────────────────────────────────────────
+ * Studio canvas — make edges and reconnect anchors actually grabbable.
+ * xyflow ships them invisible by default, which is fine for code editors
+ * and not for a domain-specific layout tool like ours.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/* Edge body. Hover thickens it so you know it's clickable; selected shows
+ * the cursor as a crosshair, signalling "click anywhere to add a waypoint". */
+.react-flow__edge .react-flow__edge-path {
+  transition: stroke 120ms ease, stroke-width 120ms ease;
+}
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: #1c1917;
+  stroke-width: 2.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #1c1917;
+  stroke-width: 2.5;
+}
+.react-flow__edge.selected .react-flow__edge-interaction {
+  cursor: crosshair;
+}
+.react-flow__edge:not(.selected) .react-flow__edge-interaction {
+  cursor: pointer;
+}
+
+/* Reconnect anchors at edge endpoints. Default xyflow makes these
+ * transparent 10px circles — so you grope blindly for the grab point.
+ * Show them as visible black dots when an edge is selected; expand on
+ * hover so you know you've grabbed the right thing. */
+.react-flow__edgeupdater {
+  cursor: grab;
+  transition: r 120ms ease, fill 120ms ease;
+}
+.react-flow__edge.selected .react-flow__edgeupdater,
+.react-flow__edge:hover .react-flow__edgeupdater {
+  fill: #1c1917;
+  stroke: white;
+  stroke-width: 2;
+  r: 6;
+}
+.react-flow__edgeupdater:hover {
+  fill: #f59e0b;
+  r: 9;
+}
+.react-flow__edgeupdater:active {
+  cursor: grabbing;
+  fill: #f59e0b;
+}
+
+/* Make reconnect drag-target handles on the destination node also visible
+ * during the drag — xyflow adds .connectingfrom / .connectingto. */
+.react-flow__handle.connectingfrom,
+.react-flow__handle.connectingto {
+  background: #f59e0b !important;
+  width: 12px !important;
+  height: 12px !important;
+}
+

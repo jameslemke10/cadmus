@@ -35,6 +35,7 @@ interface ParsedBody {
   type?: unknown;
   data?: unknown;
   nodes?: unknown;
+  edges?: unknown;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<ParsedBody> {
@@ -70,6 +71,43 @@ function isPositionMap(v: unknown): v is Record<string, { x: number; y: number }
   return true;
 }
 
+interface EdgeOverride {
+  sourceHandle?: string;
+  targetHandle?: string;
+  waypoints?: { x: number; y: number }[];
+  labelOffset?: { dx: number; dy: number };
+}
+
+function isEdgeOverrideMap(v: unknown): v is Record<string, EdgeOverride> {
+  if (v === undefined) return true; // optional
+  if (!v || typeof v !== "object") return false;
+  for (const val of Object.values(v as Record<string, unknown>)) {
+    if (!val || typeof val !== "object") return false;
+    const o = val as {
+      sourceHandle?: unknown;
+      targetHandle?: unknown;
+      waypoints?: unknown;
+      labelOffset?: unknown;
+    };
+    if (o.sourceHandle !== undefined && typeof o.sourceHandle !== "string") return false;
+    if (o.targetHandle !== undefined && typeof o.targetHandle !== "string") return false;
+    if (o.waypoints !== undefined) {
+      if (!Array.isArray(o.waypoints)) return false;
+      for (const wp of o.waypoints) {
+        if (!wp || typeof wp !== "object") return false;
+        const p = wp as { x?: unknown; y?: unknown };
+        if (typeof p.x !== "number" || typeof p.y !== "number") return false;
+      }
+    }
+    if (o.labelOffset !== undefined) {
+      if (!o.labelOffset || typeof o.labelOffset !== "object") return false;
+      const lo = o.labelOffset as { dx?: unknown; dy?: unknown };
+      if (typeof lo.dx !== "number" || typeof lo.dy !== "number") return false;
+    }
+  }
+  return true;
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   setCors(res);
   res.statusCode = status;
@@ -101,23 +139,26 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
       });
     }
 
-    // GET /api/layout — per-node positions for the canvas. {} if no file exists.
+    // GET /api/layout — per-node positions and per-edge handle overrides
+    // for the canvas. {} if no file exists.
     if (req.method === "GET" && url.pathname === "/api/layout") {
-      if (!options.layoutPath) return json(res, 200, { nodes: {} });
-      if (!existsSync(options.layoutPath)) return json(res, 200, { nodes: {} });
+      if (!options.layoutPath) return json(res, 200, { nodes: {}, edges: {} });
+      if (!existsSync(options.layoutPath)) return json(res, 200, { nodes: {}, edges: {} });
       try {
         const raw = readFileSync(options.layoutPath, "utf8");
-        const parsed = JSON.parse(raw) as { nodes?: unknown };
+        const parsed = JSON.parse(raw) as { nodes?: unknown; edges?: unknown };
         const nodes = isPositionMap(parsed.nodes) ? parsed.nodes : {};
-        return json(res, 200, { nodes });
+        const edges = isEdgeOverrideMap(parsed.edges) ? (parsed.edges ?? {}) : {};
+        return json(res, 200, { nodes, edges });
       } catch (err) {
         return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
       }
     }
 
-    // POST /api/layout { nodes: { [id]: { x, y } } } — write positions.
-    // The agent owner commits this file with the example so first-load looks
-    // good; users who drag and save overwrite it locally.
+    // POST /api/layout { nodes: { [id]: { x, y } }, edges?: { [id]: { sourceHandle?, targetHandle? } } }
+    // — write positions and per-edge handle assignments. The agent owner
+    // commits this file with the example so first-load looks good; users
+    // who drag and reconnect in Studio overwrite their local copy.
     if (req.method === "POST" && url.pathname === "/api/layout") {
       if (!options.layoutPath) {
         return json(res, 501, { error: "kernel not configured with a layoutPath" });
@@ -127,11 +168,20 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
         if (!isPositionMap(body.nodes)) {
           return json(res, 400, { error: "expected { nodes: { [id]: { x, y } } }" });
         }
+        if (!isEdgeOverrideMap(body.edges)) {
+          return json(res, 400, {
+            error: "edges must be { [id]: { sourceHandle?, targetHandle? } }",
+          });
+        }
+        const out: { version: number; nodes: unknown; edges?: unknown } = {
+          version: 1,
+          nodes: body.nodes,
+        };
+        if (body.edges && Object.keys(body.edges as Record<string, unknown>).length > 0) {
+          out.edges = body.edges;
+        }
         mkdirSync(dirname(options.layoutPath), { recursive: true });
-        writeFileSync(
-          options.layoutPath,
-          JSON.stringify({ version: 1, nodes: body.nodes }, null, 2) + "\n",
-        );
+        writeFileSync(options.layoutPath, JSON.stringify(out, null, 2) + "\n");
         return json(res, 200, { ok: true, path: options.layoutPath });
       } catch (err) {
         return json(res, 500, { error: err instanceof Error ? err.message : String(err) });

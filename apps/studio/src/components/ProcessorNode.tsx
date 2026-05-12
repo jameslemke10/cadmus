@@ -3,6 +3,7 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import type { ProcessorNodeData } from "../lib/graph";
 import { filterEntryLabel } from "../lib/filter";
+import { ALL_HANDLES } from "../lib/handles";
 
 const TEMPLATE_COLORS: Record<string, string> = {
   llm_call: "bg-violet-50 border-violet-200 text-violet-900",
@@ -10,13 +11,23 @@ const TEMPLATE_COLORS: Record<string, string> = {
   code: "bg-amber-50 border-amber-200 text-amber-900",
 };
 
+const SIDE_TO_POSITION = {
+  top: Position.Top,
+  right: Position.Right,
+  bottom: Position.Bottom,
+  left: Position.Left,
+} as const;
+
 export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeData>>) {
-  const { processor, pulse } = data;
+  const { processor, pulse, usedHandles, revealAllHandles } = data;
   const colorClass = TEMPLATE_COLORS[processor.template] ?? "bg-stone-50 border-stone-200";
   const isFiring = Date.now() - pulse < 800;
-  const usesMemory = (processor.tools ?? []).some((t) =>
-    ["memory_search", "memory_get", "memory_write", "memory_delete"].includes(t),
-  );
+
+  // Render every position-handle so xyflow can route to any of them. The
+  // ones not currently in use are visually invisible until the user starts
+  // a reconnect drag (xyflow swaps in `.connectingto` styling) — that's
+  // what makes the whole perimeter feel like a continuous attach surface.
+  const used = new Set(usedHandles ?? []);
 
   return (
     <div
@@ -24,46 +35,42 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
         selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
       } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg" : ""}`}
     >
-      {/* Forward flow: events come in the left, go out the right. */}
-      <Handle id="in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
-      <Handle id="out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
-
-      {/* Back-edge handles. When a downstream processor emits an event that
-          re-triggers an upstream one (the brain's pfc_loop is the canonical
-          case), routing through left/right would force the line through the
-          middle of the row. Bottom-out from the looper, top-in to the
-          retrigger target — the line bends under the row instead. */}
-      <Handle
-        id="back-out"
-        type="source"
-        position={Position.Bottom}
-        style={{ background: "#a8a29e", left: "20%" }}
-      />
-      <Handle
-        id="back-in"
-        type="target"
-        position={Position.Top}
-        style={{ background: "#a8a29e", left: "20%" }}
-      />
-
-      {/* Memory handles (bottom right): write goes out, read comes in. Only
-          present when the processor declares memory_* tools. */}
-      {usesMemory && (
-        <>
+      {ALL_HANDLES.map((h) => {
+        const isUsed = used.has(h.id);
+        const sideStyle =
+          h.side === "top" || h.side === "bottom"
+            ? { left: `${h.fraction * 100}%` }
+            : { top: `${h.fraction * 100}%` };
+        // Visual styling tiers:
+        //   - in active edge → solid dark dot
+        //   - reveal mode (reconnect) → light dot so user sees drop targets
+        //   - idle and unused → fully transparent (still hit-testable for drops)
+        const background = isUsed
+          ? "#a8a29e"
+          : revealAllHandles
+            ? "#d6d3d1"
+            : "transparent";
+        const border = isUsed
+          ? "1px solid white"
+          : revealAllHandles
+            ? "1px solid white"
+            : "1px solid transparent";
+        return (
           <Handle
-            id="mem-out"
+            key={h.id}
+            id={h.id}
             type="source"
-            position={Position.Bottom}
-            style={{ background: "#10b981", left: "62%" }}
+            position={SIDE_TO_POSITION[h.side]}
+            style={{
+              background,
+              border,
+              width: 8,
+              height: 8,
+              ...sideStyle,
+            }}
           />
-          <Handle
-            id="mem-in"
-            type="target"
-            position={Position.Bottom}
-            style={{ background: "#10b981", left: "82%" }}
-          />
-        </>
-      )}
+        );
+      })}
 
       <div className="px-3 pt-3 pb-2">
         <div className="flex items-center justify-between gap-2">

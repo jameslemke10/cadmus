@@ -2,28 +2,67 @@
   "version": 1,
   "nodes": {
     "channel-in:studio": {
-      "x": 80,
-      "y": 60
+      "x": 232,
+      "y": 136
     },
     "hippocampus": {
-      "x": 460,
-      "y": 60
+      "x": 502,
+      "y": 71
     },
     "thalamus": {
-      "x": 875,
-      "y": -234
+      "x": 910,
+      "y": 95
     },
     "pfc": {
-      "x": 1220,
-      "y": 60
+      "x": 1272,
+      "y": 78
     },
     "channel-out:studio": {
-      "x": 1600,
-      "y": 60
+      "x": 1689,
+      "y": 143
     },
     "memory:store": {
-      "x": 890,
-      "y": 340
+      "x": 990,
+      "y": 420
+    }
+  },
+  "edges": {
+    "pfc__pfc_loop__hippocampus": {
+      "sourceHandle": "bottom-1",
+      "targetHandle": "bottom-3",
+      "waypoints": [
+        {
+          "x": 1045,
+          "y": 366
+        }
+      ]
+    },
+    "memory:store__memory_read__hippocampus": {
+      "sourceHandle": "left-2",
+      "targetHandle": "bottom-1"
+    },
+    "pfc__memory_write__memory:store": {
+      "targetHandle": "right-2"
+    },
+    "hippocampus__memory_retrieved__thalamus": {
+      "sourceHandle": "top-4",
+      "targetHandle": "top-0",
+      "waypoints": [
+        {
+          "x": 881,
+          "y": 37
+        }
+      ]
+    },
+    "thalamus__working_memory_updated__pfc": {
+      "sourceHandle": "top-4",
+      "targetHandle": "top-0",
+      "waypoints": [
+        {
+          "x": 1232,
+          "y": 34
+        }
+      ]
     }
   }
 }
