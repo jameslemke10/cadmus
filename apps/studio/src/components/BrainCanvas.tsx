@@ -44,16 +44,26 @@ interface Props {
   api: string;
   agent: AgentMeta;
   latestEvent: CadmusEvent | null;
+  /** Names of processors currently in-flight (latest trigger newer than
+   *  latest self-emit). Studio computes this from the timeline. */
+  runningProcessors: Set<string>;
   onProcessorClick: (processorName: string) => void;
 }
 
-export function BrainCanvas({ api, agent, latestEvent, onProcessorClick }: Props) {
+export function BrainCanvas({
+  api,
+  agent,
+  latestEvent,
+  runningProcessors,
+  onProcessorClick,
+}: Props) {
   return (
     <ReactFlowProvider>
       <BrainCanvasInner
         api={api}
         agent={agent}
         latestEvent={latestEvent}
+        runningProcessors={runningProcessors}
         onProcessorClick={onProcessorClick}
       />
     </ReactFlowProvider>
@@ -146,7 +156,13 @@ function edgesToOverrides(current: Edge[], defaults: Edge[]): LayoutEdges {
   return out;
 }
 
-function BrainCanvasInner({ api, agent, latestEvent, onProcessorClick }: Props) {
+function BrainCanvasInner({
+  api,
+  agent,
+  latestEvent,
+  runningProcessors,
+  onProcessorClick,
+}: Props) {
   const layoutKey = useMemo(
     () =>
       `${agent.id}::${agent.processors.map((p) => p.name).sort().join(",")}::${(agent.channels ?? [])
@@ -180,6 +196,23 @@ function BrainCanvasInner({ api, agent, latestEvent, onProcessorClick }: Props) 
   const dirty =
     (baselineNodeKey !== "" && currentNodeKey !== baselineNodeKey) ||
     (baselineEdgeKey !== "" && currentEdgeKey !== baselineEdgeKey);
+
+  // Mirror the runningProcessors set onto each processor node's data.running.
+  // ProcessorNode reads this and renders a "thinking" pulse while in-flight.
+  useEffect(() => {
+    setNodes((prev) => {
+      let changed = false;
+      const next = prev.map((n) => {
+        if (n.type !== "processor") return n;
+        const desired = runningProcessors.has(n.id);
+        const current = (n.data as { running?: boolean }).running ?? false;
+        if (desired === current) return n;
+        changed = true;
+        return { ...n, data: { ...n.data, running: desired } };
+      });
+      return changed ? next : prev;
+    });
+  }, [runningProcessors, setNodes]);
 
   // Keep each node's `usedHandles` in sync with the current edge set. Without
   // this, reconnecting an edge moves the LINE (xyflow reads the new handle id)

@@ -143,6 +143,37 @@ export function Studio() {
     return counts;
   }, [agent, events]);
 
+  // A processor is "running" if its most recent triggering event has a higher
+  // seq than its most recent self-emitted event. The runtime stamps every
+  // event a processor emits (including auto-emitted tool_call/tool_result
+  // around ctx.callTool) with `source: "processor:<name>"`, so as long as
+  // the processor emits anything during its invocation we can detect when
+  // it's still in-flight just by reading the timeline.
+  const runningProcessors = useMemo(() => {
+    if (!agent) return new Set<string>();
+    const lastTrigger = new Map<string, number>();
+    const lastResponse = new Map<string, number>();
+    for (const e of events) {
+      for (const p of agent.processors) {
+        if (filterMatchesEvent(p.filter, e)) {
+          const cur = lastTrigger.get(p.name) ?? -1;
+          if (e.seq > cur) lastTrigger.set(p.name, e.seq);
+        }
+        if (e.source === `processor:${p.name}`) {
+          const cur = lastResponse.get(p.name) ?? -1;
+          if (e.seq > cur) lastResponse.set(p.name, e.seq);
+        }
+      }
+    }
+    const running = new Set<string>();
+    for (const p of agent.processors) {
+      const t = lastTrigger.get(p.name) ?? -1;
+      const r = lastResponse.get(p.name) ?? -1;
+      if (t > r) running.add(p.name);
+    }
+    return running;
+  }, [agent, events]);
+
   return (
     <div className="h-screen w-screen flex flex-col bg-stone-50 overflow-hidden">
       <Header
@@ -191,6 +222,7 @@ export function Studio() {
                   api={api}
                   agent={agent}
                   latestEvent={latestEvent}
+                  runningProcessors={runningProcessors}
                   onProcessorClick={setSelectedProcessor}
                 />
               ) : (

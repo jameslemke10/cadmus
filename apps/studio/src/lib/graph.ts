@@ -20,6 +20,9 @@ export interface ProcessorNodeData extends Record<string, unknown> {
   /** When true (during a reconnect drag), the node renders ALL of its
    *  declared handles so the user has somewhere to drop the endpoint. */
   revealAllHandles: boolean;
+  /** True while the processor is in-flight: the most recent triggering
+   *  event has a higher seq than the most recent self-emitted event. */
+  running: boolean;
 }
 
 const COLUMN_WIDTH = 380;
@@ -86,7 +89,7 @@ export function buildGraph(
         id: p.name,
         type: "processor",
         position: { x: procXOffset + layerIdx * COLUMN_WIDTH, y: 60 + rowIdx * ROW_HEIGHT },
-        data: { processor: p, pulse: 0, usedHandles: [], revealAllHandles: false },
+        data: { processor: p, pulse: 0, usedHandles: [], revealAllHandles: false, running: false },
       });
       nodeColumn.set(p.name, layerIdx);
     }

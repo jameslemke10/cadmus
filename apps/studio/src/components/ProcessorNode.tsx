@@ -19,7 +19,7 @@ const SIDE_TO_POSITION = {
 } as const;
 
 export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeData>>) {
-  const { processor, pulse, usedHandles, revealAllHandles } = data;
+  const { processor, pulse, usedHandles, revealAllHandles, running } = data;
   const colorClass = TEMPLATE_COLORS[processor.template] ?? "bg-stone-50 border-stone-200";
   const isFiring = Date.now() - pulse < 800;
 
@@ -29,12 +29,25 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
   // what makes the whole perimeter feel like a continuous attach surface.
   const used = new Set(usedHandles ?? []);
 
+  // Visual priority: running > firing-pulse > selected > idle. Running
+  // gets a sustained amber ring with a pulse animation so the user can
+  // see at a glance which boxes are doing work right now.
+  const ringClass = running
+    ? "ring-2 ring-amber-400 ring-offset-2 shadow-lg animate-pulse"
+    : isFiring
+      ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg"
+      : selected
+        ? "ring-2 ring-stone-900 ring-offset-2"
+        : "";
+
   return (
-    <div
-      className={`min-w-[230px] rounded-xl border bg-white shadow-sm transition-all ${
-        selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
-      } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg" : ""}`}
-    >
+    <div className={`min-w-[230px] rounded-xl border bg-white shadow-sm transition-all ${ringClass}`}>
+      {running && (
+        <div className="absolute -top-2 -right-2 z-10 inline-flex items-center gap-1 rounded-full bg-amber-400 text-stone-900 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 shadow">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-stone-900 animate-pulse" />
+          thinking
+        </div>
+      )}
       {ALL_HANDLES.map((h) => {
         const isUsed = used.has(h.id);
         const sideStyle =
