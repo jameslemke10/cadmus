@@ -20,12 +20,17 @@ const MEMORY_WRITE_TOOLS = new Set(["memory_write", "memory_delete"]);
 /**
  * Build React Flow nodes + edges from the agent's processors + channels.
  *
- * Layout is strict left-to-right: inbound channels on the far left,
- * processors in topological-ish columns, outbound channels on the far
- * right, memory below the row connected by top/bottom handles.
+ * Layout is left-to-right: inbound channels far left, processors in
+ * topological columns, outbound channels far right, memory below the row.
  *
- * Nodes are not draggable, so positions are deterministic and edges
- * route cleanly (left/right handles for flow, top/bottom for memory).
+ * Edges:
+ *  - Forward edges (source col < target col) use right→left handles.
+ *  - Back-edges (source col >= target col) use bottom→top handles, so the
+ *    line bends UNDER the row instead of cutting through it. This matters
+ *    a lot for loops like the brain's pfc_loop (PFC at col 2 → hippocampus
+ *    at col 0).
+ *  - Multiple event types between the same (source, target) pair are
+ *    bundled into a single edge whose label is "evt1 | evt2".
  */
 export function buildGraph(
   processors: ProcessorMeta[],
@@ -37,16 +42,21 @@ export function buildGraph(
   const layers = layerProcessors(processors);
   const procColumns = layers.length;
 
+  // Column index per node id — used to detect back-edges and pick handles.
+  const nodeColumn = new Map<string, number>();
+
   const nodes: Node<ProcessorNodeData | ChannelNodeData | MemoryNodeData>[] = [];
 
   const inboundChannels = channels.filter((c) => (c.inboundEvents ?? []).length > 0);
   for (const [rowIdx, ch] of inboundChannels.entries()) {
+    const id = `channel-in:${ch.name}`;
     nodes.push({
-      id: `channel-in:${ch.name}`,
+      id,
       type: "channel",
       position: { x: 80, y: 60 + rowIdx * ROW_HEIGHT },
       data: { name: ch.name, side: "in", events: ch.inboundEvents ?? [], pulse: 0 },
     });
+    nodeColumn.set(id, -1);
   }
 
   const procXOffset = inboundChannels.length > 0 ? 80 + COLUMN_WIDTH : 80;
@@ -58,18 +68,21 @@ export function buildGraph(
         position: { x: procXOffset + layerIdx * COLUMN_WIDTH, y: 60 + rowIdx * ROW_HEIGHT },
         data: { processor: p, pulse: 0 },
       });
+      nodeColumn.set(p.name, layerIdx);
     }
   }
 
   const outboundChannels = channels.filter((c) => (c.outboundEvents ?? []).length > 0);
   const outX = procXOffset + procColumns * COLUMN_WIDTH;
   for (const [rowIdx, ch] of outboundChannels.entries()) {
+    const id = `channel-out:${ch.name}`;
     nodes.push({
-      id: `channel-out:${ch.name}`,
+      id,
       type: "channel",
       position: { x: outX, y: 60 + rowIdx * ROW_HEIGHT },
       data: { name: ch.name, side: "out", events: ch.outboundEvents ?? [], pulse: 0 },
     });
+    nodeColumn.set(id, procColumns);
   }
 
   // Memory node — show it if any processor uses memory tools.
@@ -79,7 +92,6 @@ export function buildGraph(
   if (memoryUsers.length > 0) {
     const maxRowsPerLayer = Math.max(...layers.map((l) => l.length), 1);
     const memoryY = 60 + maxRowsPerLayer * ROW_HEIGHT + 60;
-    // Center memory horizontally below the processor row.
     const memoryX = procXOffset + Math.floor(procColumns / 2) * COLUMN_WIDTH + 50;
     nodes.push({
       id: MEMORY_NODE_ID,
@@ -89,42 +101,58 @@ export function buildGraph(
     });
   }
 
-  const edges: Edge[] = [];
+  // Build the (source, target) → eventTypes[] map. Bundling happens here:
+  // multiple event types between the same pair collapse into one edge.
+  const flowBundle = new Map<string, { source: string; target: string; events: string[] }>();
+  const addFlow = (source: string, target: string, eventType: string) => {
+    const key = `${source}__${target}`;
+    let entry = flowBundle.get(key);
+    if (!entry) {
+      entry = { source, target, events: [] };
+      flowBundle.set(key, entry);
+    }
+    if (!entry.events.includes(eventType)) entry.events.push(eventType);
+  };
 
-  // Processor → processor edges — go right→left between columns.
   for (const emitter of processors) {
     for (const eventType of emitter.outputEvents ?? []) {
       for (const consumer of processors) {
         if (filterMatchesType(consumer.filter, eventType)) {
-          edges.push(makeFlowEdge(emitter.name, consumer.name, eventType));
+          addFlow(emitter.name, consumer.name, eventType);
         }
       }
     }
   }
 
-  // Inbound channel → processor edges.
   for (const ch of inboundChannels) {
     for (const eventType of ch.inboundEvents ?? []) {
       for (const consumer of processors) {
         if (filterMatchesType(consumer.filter, eventType)) {
-          edges.push(makeFlowEdge(`channel-in:${ch.name}`, consumer.name, eventType));
+          addFlow(`channel-in:${ch.name}`, consumer.name, eventType);
         }
       }
     }
   }
 
-  // Processor → outbound channel edges.
   for (const ch of outboundChannels) {
     for (const eventType of ch.outboundEvents ?? []) {
       for (const emitter of processors) {
         if ((emitter.outputEvents ?? []).includes(eventType)) {
-          edges.push(makeFlowEdge(emitter.name, `channel-out:${ch.name}`, eventType));
+          addFlow(emitter.name, `channel-out:${ch.name}`, eventType);
         }
       }
     }
   }
 
-  // Memory edges. Both connect processor.bottom ↔ memory.top via explicit
+  const edges: Edge[] = [];
+  for (const { source, target, events } of flowBundle.values()) {
+    const srcCol = nodeColumn.get(source) ?? 0;
+    const tgtCol = nodeColumn.get(target) ?? 0;
+    const isBack = srcCol >= tgtCol && source !== target;
+    edges.push(makeFlowEdge(source, target, events, isBack));
+  }
+
+  // Memory edges. Connect processor.memHandles ↔ memory.top via explicit
   // handles so they don't try to route through the side flow.
   for (const p of memoryUsers) {
     const tools = p.tools ?? [];
@@ -141,27 +169,43 @@ export function buildGraph(
   return { nodes, edges };
 }
 
-function makeFlowEdge(source: string, target: string, eventType: string): Edge {
+function makeFlowEdge(source: string, target: string, events: string[], isBack: boolean): Edge {
+  // Bundle: two events become "evt1 | evt2"; three or more get collapsed
+  // visually with a count so labels stay readable.
+  const label =
+    events.length <= 2 ? events.join(" | ") : `${events[0]} | +${events.length - 1} more`;
+
+  // Forward edges flow right→left as before. Back-edges route under the
+  // row using the bottom→top handles defined on ProcessorNode.
+  const sourceHandle = isBack ? "back-out" : "out";
+  const targetHandle = isBack ? "back-in" : "in";
+
   return {
-    id: `${source}__${eventType}__${target}`,
+    id: `${source}__${events.join(",")}__${target}`,
     source,
-    sourceHandle: "out",
+    sourceHandle,
     target,
-    targetHandle: "in",
-    label: eventType,
+    targetHandle,
+    label,
     type: "smoothstep",
     animated: false,
-    data: { eventType },
+    // Store the underlying event types so the runtime pulse can still match.
+    data: { eventType: events[0], eventTypes: events },
+    pathOptions: { borderRadius: 16, offset: isBack ? 28 : 16 },
     labelStyle: {
       fontSize: 11,
       fontFamily: "ui-monospace, monospace",
-      fill: "#57534e",
+      fill: "#1c1917",
     },
-    labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
-    labelBgPadding: [4, 2] as [number, number],
-    labelBgBorderRadius: 4,
+    labelBgStyle: {
+      fill: "#ffffff",
+      stroke: "#e7e5e4",
+      strokeWidth: 1,
+    },
+    labelBgPadding: [6, 4] as [number, number],
+    labelBgBorderRadius: 6,
     style: { stroke: "#a8a29e", strokeWidth: 1.5 },
-  };
+  } as Edge;
 }
 
 function makeMemoryEdge(
@@ -181,12 +225,13 @@ function makeMemoryEdge(
     type: "smoothstep",
     animated: false,
     data: { eventType: label },
-    labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#57534e" },
-    labelBgStyle: { fill: "#fafaf9", fillOpacity: 0.9 },
-    labelBgPadding: [3, 2] as [number, number],
-    labelBgBorderRadius: 4,
-    style: { stroke: "#a8a29e", strokeWidth: 1.5 },
-  };
+    pathOptions: { borderRadius: 12, offset: 12 },
+    labelStyle: { fontSize: 10, fontFamily: "ui-monospace, monospace", fill: "#1c1917" },
+    labelBgStyle: { fill: "#ffffff", stroke: "#d1fae5", strokeWidth: 1 },
+    labelBgPadding: [5, 3] as [number, number],
+    labelBgBorderRadius: 6,
+    style: { stroke: "#10b981", strokeWidth: 1.25, strokeDasharray: "4 3" },
+  } as Edge;
 }
 
 function layerProcessors(processors: ProcessorMeta[]): ProcessorMeta[][] {

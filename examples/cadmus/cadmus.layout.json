@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "nodes": {
+    "channel-in:studio": {
+      "x": 80,
+      "y": 60
+    },
+    "hippocampus": {
+      "x": 460,
+      "y": 60
+    },
+    "thalamus": {
+      "x": 875,
+      "y": -234
+    },
+    "pfc": {
+      "x": 1220,
+      "y": 60
+    },
+    "channel-out:studio": {
+      "x": 1600,
+      "y": 60
+    },
+    "memory:store": {
+      "x": 890,
+      "y": 340
+    }
+  }
+}

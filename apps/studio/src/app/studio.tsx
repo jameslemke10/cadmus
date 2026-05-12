@@ -188,6 +188,7 @@ export function Studio() {
             <main className="relative bg-stone-50 h-full">
               {agent ? (
                 <BrainCanvas
+                  api={api}
                   agent={agent}
                   latestEvent={latestEvent}
                   onProcessorClick={setSelectedProcessor}

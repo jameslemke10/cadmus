@@ -5,7 +5,8 @@ import type { ProcessorNodeData } from "../lib/graph";
 import { filterEntryLabel } from "../lib/filter";
 
 const TEMPLATE_COLORS: Record<string, string> = {
-  llm: "bg-violet-50 border-violet-200 text-violet-900",
+  llm_call: "bg-violet-50 border-violet-200 text-violet-900",
+  llm_loop: "bg-indigo-50 border-indigo-200 text-indigo-900",
   code: "bg-amber-50 border-amber-200 text-amber-900",
 };
 
@@ -23,25 +24,43 @@ export function ProcessorNode({ data, selected }: NodeProps<Node<ProcessorNodeDa
         selected ? "ring-2 ring-stone-900 ring-offset-2" : ""
       } ${isFiring ? "ring-2 ring-emerald-400 ring-offset-2 shadow-lg" : ""}`}
     >
-      {/* Flow handles: events come in the left, go out the right. */}
+      {/* Forward flow: events come in the left, go out the right. */}
       <Handle id="in" type="target" position={Position.Left} style={{ background: "#a8a29e" }} />
       <Handle id="out" type="source" position={Position.Right} style={{ background: "#a8a29e" }} />
 
-      {/* Memory handles (bottom): write goes out, read comes in. Only present
-          when the processor declares memory_* tools — keeps the visual clean. */}
+      {/* Back-edge handles. When a downstream processor emits an event that
+          re-triggers an upstream one (the brain's pfc_loop is the canonical
+          case), routing through left/right would force the line through the
+          middle of the row. Bottom-out from the looper, top-in to the
+          retrigger target — the line bends under the row instead. */}
+      <Handle
+        id="back-out"
+        type="source"
+        position={Position.Bottom}
+        style={{ background: "#a8a29e", left: "20%" }}
+      />
+      <Handle
+        id="back-in"
+        type="target"
+        position={Position.Top}
+        style={{ background: "#a8a29e", left: "20%" }}
+      />
+
+      {/* Memory handles (bottom right): write goes out, read comes in. Only
+          present when the processor declares memory_* tools. */}
       {usesMemory && (
         <>
           <Handle
             id="mem-out"
             type="source"
             position={Position.Bottom}
-            style={{ background: "#10b981", left: "38%" }}
+            style={{ background: "#10b981", left: "62%" }}
           />
           <Handle
             id="mem-in"
             type="target"
             position={Position.Bottom}
-            style={{ background: "#10b981", left: "62%" }}
+            style={{ background: "#10b981", left: "82%" }}
           />
         </>
       )}

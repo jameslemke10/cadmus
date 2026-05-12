@@ -138,7 +138,12 @@ async function main() {
       }
     })();
 
-    startServer(runtime, { port, workspace: workspaceInfo });
+    // The layout file lives next to the running config so example authors
+    // can ship a curated layout (`cadmus.layout.json`) alongside the example,
+    // and users who drag and save in Studio overwrite their local copy.
+    const layoutPath = resolve(dirname(configPath), "cadmus.layout.json");
+
+    startServer(runtime, { port, workspace: workspaceInfo, layoutPath });
     console.log("");
     console.log(`Studio UI: http://localhost:${process.env.CADMUS_STUDIO_PORT ?? 3001}`);
     console.log(`Inject:    curl -X POST http://localhost:${port}/api/inject -d '{"text":"hello"}'`);

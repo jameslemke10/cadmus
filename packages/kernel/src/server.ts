@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Runtime } from "./runtime.js";
 import type { CadmusEvent } from "./types.js";
 
@@ -21,6 +23,9 @@ export interface ServerOptions {
   port?: number;
   host?: string;
   workspace?: WorkspaceInfo;
+  /** Absolute path to the layout file for the running agent. Studio reads
+   *  and writes per-node positions here. */
+  layoutPath?: string;
 }
 
 interface ParsedBody {
@@ -29,6 +34,7 @@ interface ParsedBody {
   kind?: unknown;
   type?: unknown;
   data?: unknown;
+  nodes?: unknown;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<ParsedBody> {
@@ -50,8 +56,18 @@ async function readJsonBody(req: IncomingMessage): Promise<ParsedBody> {
 
 function setCors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function isPositionMap(v: unknown): v is Record<string, { x: number; y: number }> {
+  if (!v || typeof v !== "object") return false;
+  for (const val of Object.values(v as Record<string, unknown>)) {
+    if (!val || typeof val !== "object") return false;
+    const p = val as { x?: unknown; y?: unknown };
+    if (typeof p.x !== "number" || typeof p.y !== "number") return false;
+  }
+  return true;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -83,6 +99,57 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
         agents: options.workspace.agents,
         activeAgent: options.workspace.activeAgent,
       });
+    }
+
+    // GET /api/layout — per-node positions for the canvas. {} if no file exists.
+    if (req.method === "GET" && url.pathname === "/api/layout") {
+      if (!options.layoutPath) return json(res, 200, { nodes: {} });
+      if (!existsSync(options.layoutPath)) return json(res, 200, { nodes: {} });
+      try {
+        const raw = readFileSync(options.layoutPath, "utf8");
+        const parsed = JSON.parse(raw) as { nodes?: unknown };
+        const nodes = isPositionMap(parsed.nodes) ? parsed.nodes : {};
+        return json(res, 200, { nodes });
+      } catch (err) {
+        return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // POST /api/layout { nodes: { [id]: { x, y } } } — write positions.
+    // The agent owner commits this file with the example so first-load looks
+    // good; users who drag and save overwrite it locally.
+    if (req.method === "POST" && url.pathname === "/api/layout") {
+      if (!options.layoutPath) {
+        return json(res, 501, { error: "kernel not configured with a layoutPath" });
+      }
+      try {
+        const body = await readJsonBody(req);
+        if (!isPositionMap(body.nodes)) {
+          return json(res, 400, { error: "expected { nodes: { [id]: { x, y } } }" });
+        }
+        mkdirSync(dirname(options.layoutPath), { recursive: true });
+        writeFileSync(
+          options.layoutPath,
+          JSON.stringify({ version: 1, nodes: body.nodes }, null, 2) + "\n",
+        );
+        return json(res, 200, { ok: true, path: options.layoutPath });
+      } catch (err) {
+        return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // DELETE /api/layout — remove the saved layout (revert to defaults).
+    if (req.method === "DELETE" && url.pathname === "/api/layout") {
+      if (!options.layoutPath || !existsSync(options.layoutPath)) {
+        return json(res, 200, { ok: true });
+      }
+      try {
+        const fs = await import("node:fs");
+        fs.unlinkSync(options.layoutPath);
+        return json(res, 200, { ok: true });
+      } catch (err) {
+        return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     // POST /api/workspace/active-agent { name } — request a switch
