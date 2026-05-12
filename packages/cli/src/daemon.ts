@@ -3,6 +3,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, statSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { CADMUS_HOME } from "./workspace.js";
 
@@ -71,6 +72,32 @@ export function elapsedSince(iso: string): string {
   if (hr < 24) return `${hr}h ${min % 60}m`;
   const days = Math.floor(hr / 24);
   return `${days}d ${hr % 24}h`;
+}
+
+/**
+ * Probe whether a TCP port is free to bind. Used as a pre-flight before
+ * spawning kernel + Studio, so collisions surface as a clean message
+ * instead of an unhandled EADDRINUSE stack trace.
+ *
+ * If `host` is omitted, listens on the wildcard address (::) — matches
+ * how Next.js binds the Studio port, so we catch IPv6-only squatters too.
+ * For the kernel we pass "127.0.0.1" explicitly because that's the iface
+ * the kernel binds to.
+ */
+export function isPortFree(port: number, host?: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = createServer();
+    tester.once("error", () => resolve(false));
+    tester.once("listening", () => {
+      tester.close(() => resolve(true));
+    });
+    try {
+      if (host) tester.listen(port, host);
+      else tester.listen(port);
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /** Tail the last N lines of a file. Returns "" if the file doesn't exist. */

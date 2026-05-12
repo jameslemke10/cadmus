@@ -143,7 +143,6 @@ seed_agent() {
 echo "  → Installing default agents…"
 seed_agent "cadmus" "cadmus"
 seed_agent "claudius" "claudius"
-seed_agent "telly" "telly"
 
 # 3. If no config.json yet, set active agent to cadmus.
 if [ ! -f "$CADMUS_HOME/config.json" ]; then
@@ -198,10 +197,9 @@ echo
 echo "  $(bold 'Next:') run $(bold 'cadmus setup') to add an API key,"
 echo "  then $(bold 'cadmus start') to boot the active agent + Studio UI."
 echo
-echo "  Three example agents are ready:"
+echo "  Two example agents are ready:"
 echo "    $(bold 'cadmus')    — flagship brain pipeline (hippocampus → thalamus → PFC → executor)"
 echo "    $(bold 'claudius')  — single-LLM-loop agent (familiar shape)"
-echo "    $(bold 'telly')     — Telegram-connected agent (paste a bot token in setup)"
 echo
 echo "  Switch between them with $(bold 'cadmus use <name>')."
 echo

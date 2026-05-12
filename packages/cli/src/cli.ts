@@ -34,6 +34,7 @@ import {
   elapsedSince,
   ensureRuntimeDirs,
   isAlive,
+  isPortFree,
   readPidFile,
   tailFile,
   writePidFile,
@@ -201,6 +202,43 @@ async function cmdStart(): Promise<void> {
       // Stale pid file — clean up.
       clearPidFile();
     }
+  }
+
+  // Pre-flight: refuse to spawn if either port is already taken. Without this
+  // the kernel + Studio crash with raw Node EADDRINUSE stack traces seconds
+  // after we've already printed the banner — confusing and hard to recover from.
+  const portIssues: { port: number; label: string; envVar: string }[] = [];
+  // Kernel binds to 127.0.0.1; Studio (Next.js) binds wildcard (::), so
+  // probe each on the same interface its server will actually use.
+  if (!(await isPortFree(port, "127.0.0.1"))) {
+    portIssues.push({ port, label: "kernel", envVar: "CADMUS_PORT" });
+  }
+  if (studioDir && !(await isPortFree(studioPort))) {
+    portIssues.push({ port: studioPort, label: "Studio UI", envVar: "CADMUS_STUDIO_PORT" });
+  }
+  if (portIssues.length > 0) {
+    const existing = readPidFile();
+    const daemonAlive = existing && isAlive(existing.pid);
+    console.log("");
+    for (const issue of portIssues) {
+      console.log(`  ${yellow("⚠")} port ${bold(String(issue.port))} is already in use (the ${issue.label} port).`);
+    }
+    console.log("");
+    console.log("  options:");
+    if (daemonAlive) {
+      console.log(`    • a cadmus daemon is already running (pid ${existing!.pid}, agent ${existing!.agent})`);
+      console.log(`      → ${bold("cadmus status")} to inspect, or ${bold("cadmus stop")} to kill it`);
+    } else {
+      console.log(`    • ${bold("cadmus stop")} — clean up any stale cadmus processes on these ports`);
+    }
+    const overrides = portIssues
+      .map((i) => `${i.envVar}=${i.port + 1}`)
+      .join(" ");
+    console.log(`    • run on different ports: ${bold(overrides + " cadmus start")}`);
+    const lsofPorts = portIssues.map((i) => `:${i.port}`).join(" -i ");
+    console.log(`    • find what's using them: ${dim(`lsof -i ${lsofPorts}`)}`);
+    console.log("");
+    process.exit(1);
   }
 
   console.log("");

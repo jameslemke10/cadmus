@@ -389,6 +389,20 @@ export function startServer(runtime: Runtime, options: ServerOptions = {}) {
     json(res, 404, { error: "not found" });
   });
 
+  // Surface bind failures cleanly. The CLI's pre-flight check catches the
+  // common case, but a race (another process grabs the port between probe
+  // and listen) would otherwise crash with an unhandled 'error' event and a
+  // Node stack trace. Replace that with a one-line message + exit.
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[cadmus] port ${port} is already in use — kernel cannot start.`);
+      console.error(`  override with CADMUS_PORT=<port> or run \`cadmus stop\` first.`);
+    } else {
+      console.error(`[cadmus] server error: ${err.message}`);
+    }
+    process.exit(1);
+  });
+
   server.listen(port, host, () => {
     console.log(`[cadmus] api on http://${host}:${port}`);
   });
