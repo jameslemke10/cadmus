@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "nodes": {
+    "channel-in:studio": {
+      "x": 94,
+      "y": 60
+    },
+    "pfc": {
+      "x": 341,
+      "y": -5
+    },
+    "channel-out:studio": {
+      "x": 925,
+      "y": 60
+    },
+    "memory:store": {
+      "x": 510,
+      "y": 340
+    }
+  },
+  "edges": {
+    "pfc__memory_write__memory:store": {
+      "sourceHandle": "bottom-0",
+      "targetHandle": "left-2"
+    },
+    "memory:store__memory_read__pfc": {
+      "sourceHandle": "right-2"
+    }
+  }
+}

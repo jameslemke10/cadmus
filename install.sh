@@ -132,6 +132,12 @@ seed_agent() {
   mkdir -p "$target_dir"
   cp "$example_dir/cadmus.config.ts" "$target_dir/cadmus.config.ts"
   [ -f "$example_dir/README.md" ] && cp "$example_dir/README.md" "$target_dir/README.md"
+  # Curated canvas layout (node positions + edge handles/waypoints). Without
+  # this, Studio falls back to auto-routed defaults and the example doesn't
+  # look like the screenshots — and the user's first Save then writes a layout
+  # with no edge overrides (because their edges still equal defaults), making
+  # subsequent re-routes feel like they aren't being persisted.
+  [ -f "$example_dir/cadmus.layout.json" ] && cp "$example_dir/cadmus.layout.json" "$target_dir/cadmus.layout.json"
   mkdir -p "$target_dir/node_modules/@cadmus"
   ln -sfn "$CLI_DIR/packages/kernel" "$target_dir/node_modules/@cadmus/kernel"
   if [ -d "$CLI_DIR/packages/tools" ]; then
