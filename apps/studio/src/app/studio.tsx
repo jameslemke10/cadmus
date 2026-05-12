@@ -5,6 +5,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { AgentSidebar } from "../components/AgentSidebar";
 import { BrainCanvas } from "../components/BrainCanvas";
 import { ChatPanel } from "../components/ChatPanel";
+import { EventInspector } from "../components/EventInspector";
 import { ProcessorInspector } from "../components/ProcessorInspector";
 import { SetupWizard } from "../components/SetupWizard";
 import { DEFAULT_API, fetchAgent } from "../lib/api";
@@ -50,6 +51,7 @@ export function Studio() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedProcessor, setSelectedProcessor] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [status, setStatus] = useState<KernelStatus | null>(null);
   const [wizardDismissed, setWizardDismissed] = useState(false);
@@ -120,6 +122,11 @@ export function Studio() {
   const selectedProcessorMeta = useMemo(
     () => agent?.processors.find((p) => p.name === selectedProcessor) ?? null,
     [agent, selectedProcessor],
+  );
+
+  const selectedEvent = useMemo(
+    () => events.find((e) => e.id === selectedEventId) ?? null,
+    [events, selectedEventId],
   );
 
   const firingsByProcessor = useMemo(() => {
@@ -195,6 +202,8 @@ export function Studio() {
                 <TimelineDrawer
                   events={events}
                   currentAgentId={agent?.id ?? null}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={setSelectedEventId}
                   onClose={() => setTimelineOpen(false)}
                 />
               )}
@@ -220,6 +229,13 @@ export function Studio() {
         processor={selectedProcessorMeta}
         recentEvents={firingsByProcessor.get(selectedProcessor ?? "") ?? 0}
         onClose={() => setSelectedProcessor(null)}
+      />
+
+      <EventInspector
+        event={selectedEvent}
+        events={events}
+        onSelect={(e) => setSelectedEventId(e.id)}
+        onClose={() => setSelectedEventId(null)}
       />
 
       {status && !wizardDismissed && (
@@ -313,10 +329,14 @@ function Header({
 function TimelineDrawer({
   events,
   currentAgentId,
+  selectedEventId,
+  onSelectEvent,
   onClose,
 }: {
   events: CadmusEvent[];
   currentAgentId: string | null;
+  selectedEventId: string | null;
+  onSelectEvent: (id: string) => void;
   onClose: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -386,28 +406,34 @@ function TimelineDrawer({
             no events yet
           </div>
         )}
-        {visible.map((e) => (
-          <div
-            key={e.id}
-            className={`px-2 py-1.5 rounded border text-xs ${eventColor(e.type)}`}
-          >
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="font-mono opacity-50">#{e.seq}</span>
-              <span className="font-mono font-medium truncate">{e.type}</span>
-              {showAll && e.agent_id !== currentAgentId && (
-                <span className="font-mono opacity-60 text-[10px] bg-white/60 border border-current/20 rounded px-1">
-                  {e.agent_id}
+        {visible.map((e) => {
+          const isSelected = e.id === selectedEventId;
+          return (
+            <button
+              key={e.id}
+              onClick={() => onSelectEvent(e.id)}
+              className={`block w-full text-left px-2 py-1.5 rounded border text-xs transition cursor-pointer ${eventColor(e.type)} ${
+                isSelected ? "ring-2 ring-stone-900 ring-offset-1" : "hover:brightness-95"
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono opacity-50">#{e.seq}</span>
+                <span className="font-mono font-medium truncate">{e.type}</span>
+                {showAll && e.agent_id !== currentAgentId && (
+                  <span className="font-mono opacity-60 text-[10px] bg-white/60 border border-current/20 rounded px-1">
+                    {e.agent_id}
+                  </span>
+                )}
+                <span className="font-mono opacity-40 text-[10px] ml-auto">
+                  {new Date(e.timestamp).toLocaleTimeString().slice(0, 8)}
                 </span>
-              )}
-              <span className="font-mono opacity-40 text-[10px] ml-auto">
-                {new Date(e.timestamp).toLocaleTimeString().slice(0, 8)}
-              </span>
-            </div>
-            <div className="mt-0.5 font-mono opacity-70 text-[11px] line-clamp-2 break-words whitespace-pre-wrap">
-              {summary(e)}
-            </div>
-          </div>
-        ))}
+              </div>
+              <div className="mt-0.5 font-mono opacity-70 text-[11px] line-clamp-2 break-words whitespace-pre-wrap">
+                {summary(e)}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
